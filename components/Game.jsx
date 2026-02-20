@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   SOUTH, WEST, NORTH, EAST, TEAM_A, TEAM_B,
-  getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, SEAT_NAMES,
+  getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, SEAT_NAMES, isRedSuit,
   dealHands, getValidBids, getPlayableCards, evaluateTrick,
   scoreHand, updateScores, nextDealer, cardEquals, cardId,
   getLivePoints, cardDisplay, createDeck, shuffleDeck,
@@ -1300,20 +1300,20 @@ export default function Game() {
                 zIndex: 20,
                 padding: 'clamp(6px, 1.5vw, 10px) clamp(8px, 2vw, 14px)',
                 borderRadius: 12,
-                background: 'rgba(200,170,80,0.08)',
-                border: '1px solid rgba(200,170,80,0.2)',
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.1)',
                 backdropFilter: 'blur(8px)',
                 WebkitBackdropFilter: 'blur(8px)',
               }}>
                 <span style={{
                   fontSize: 'clamp(8px, 2vw, 9px)',
-                  color: 'rgba(200,170,80,0.5)',
+                  color: 'rgba(255,255,255,0.35)',
                   letterSpacing: 2, fontWeight: 600,
                 }}>TRUMP</span>
                 <span style={{
                   fontSize: 'clamp(32px, 9vw, 48px)',
-                  color: '#c8aa50',
-                  filter: 'drop-shadow(0 2px 8px rgba(200,170,80,0.4))',
+                  color: isRedSuit(trumpSuit) ? '#c44' : '#ddd',
+                  filter: `drop-shadow(0 2px 8px ${isRedSuit(trumpSuit) ? 'rgba(200,60,60,0.4)' : 'rgba(255,255,255,0.2)'})`,
                   lineHeight: 1,
                 }}>{SUIT_SYMBOLS[trumpSuit]}</span>
               </div>
