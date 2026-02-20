@@ -815,24 +815,6 @@ export default function Game() {
     );
   };
 
-  // ── Point tracker row renderer ──
-  const renderPointRow = (label, team, card) => (
-    <div>
-      <span style={{ color: 'rgba(255,255,255,0.3)' }}>{label}: </span>
-      {team !== null ? (
-        <>
-          <span style={{ color: team === TEAM_A ? '#6b8aad' : '#ad6b6b' }}>
-            {team === TEAM_A ? 'US' : 'THEM'}
-          </span>
-          {card && (
-            <span style={{ color: 'rgba(255,255,255,0.2)', marginLeft: 3 }}>{cardDisplay(card)}</span>
-          )}
-        </>
-      ) : (
-        <span style={{ color: 'rgba(255,255,255,0.15)' }}>?</span>
-      )}
-    </div>
-  );
 
   // ── Rotate trick plays for display ──
   const displayTrickPlays = isOnline
@@ -1213,7 +1195,6 @@ export default function Game() {
             <ScoreBoard
               scores={scores}
               bidInfo={bidAmount > 0 ? { amount: bidAmount, team: biddingTeam } : null}
-              trumpSuit={trumpSuit}
               trickNumber={trickNumber}
               handNumber={handNumber}
               wasSet={wasSet}
@@ -1374,34 +1355,58 @@ export default function Game() {
               </div>
             )}
 
-            {/* ── LIVE POINT TRACKER (solo only) ── */}
-            {!isOnline && trumpSuit && livePoints && (
-              <div className="point-tracker" style={{
+            {/* ── LIVE POINT TRACKER ── */}
+            {trumpSuit && livePoints && (
+              <div style={{
                 position: 'absolute',
-                right: 'clamp(12px, 3vw, 24px)',
-                bottom: 'clamp(110px, 28vw, 150px)',
+                right: 'clamp(8px, 2vw, 20px)',
+                bottom: 'clamp(110px, 28vw, 155px)',
                 zIndex: 15,
-                display: 'flex', flexDirection: 'column', gap: 1,
-                lineHeight: 1.5,
+                display: 'flex', flexDirection: 'column', gap: 'clamp(3px, 0.8vw, 5px)',
+                padding: 'clamp(8px, 2vw, 12px) clamp(10px, 2.5vw, 14px)',
+                borderRadius: 10,
+                background: 'rgba(0,0,0,0.3)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                fontSize: 'clamp(11px, 3vw, 13px)',
+                fontWeight: 500,
+                lineHeight: 1.4,
               }}>
-                {renderPointRow('H', livePoints.high, livePoints.highCard)}
-                {renderPointRow('L', livePoints.low, livePoints.lowCard)}
-                <div>
-                  <span style={{ color: 'rgba(255,255,255,0.3)' }}>J: </span>
+                {[
+                  { label: 'HIGH', team: livePoints.high, card: livePoints.highCard },
+                  { label: 'LOW', team: livePoints.low, card: livePoints.lowCard },
+                ].map(row => (
+                  <div key={row.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>{row.label}</span>
+                    {row.team !== null ? (
+                      <span style={{ color: row.team === TEAM_A ? '#6b8aad' : '#ad6b6b', fontWeight: 700 }}>
+                        {row.team === TEAM_A ? 'US' : 'THEM'}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'rgba(255,255,255,0.12)' }}>?</span>
+                    )}
+                    {row.card && (
+                      <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 'clamp(9px, 2.5vw, 11px)' }}>{cardDisplay(row.card)}</span>
+                    )}
+                  </div>
+                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>JACK</span>
                   {livePoints.jackExists
                     ? (livePoints.jack !== null
-                      ? <span style={{ color: livePoints.jack === TEAM_A ? '#6b8aad' : '#ad6b6b' }}>
+                      ? <span style={{ color: livePoints.jack === TEAM_A ? '#6b8aad' : '#ad6b6b', fontWeight: 700 }}>
                           {livePoints.jack === TEAM_A ? 'US' : 'THEM'}
                         </span>
-                      : <span style={{ color: 'rgba(255,255,255,0.15)' }}>?</span>)
+                      : <span style={{ color: 'rgba(255,255,255,0.12)' }}>?</span>)
                     : <span style={{ color: 'rgba(255,255,255,0.08)' }}>&mdash;</span>
                   }
                 </div>
-                <div>
-                  <span style={{ color: 'rgba(255,255,255,0.3)' }}>G: </span>
-                  <span style={{ color: '#6b8aad' }}>{livePoints.gameA}</span>
-                  <span style={{ color: 'rgba(255,255,255,0.1)' }}>{' - '}</span>
-                  <span style={{ color: '#ad6b6b' }}>{livePoints.gameB}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>GAME</span>
+                  <span style={{ color: '#6b8aad', fontWeight: 700 }}>{livePoints.gameA}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.08)' }}>-</span>
+                  <span style={{ color: '#ad6b6b', fontWeight: 700 }}>{livePoints.gameB}</span>
                 </div>
               </div>
             )}
