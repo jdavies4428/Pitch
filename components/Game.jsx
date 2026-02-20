@@ -9,6 +9,7 @@ import {
   getLivePoints, cardDisplay, createDeck, shuffleDeck,
 } from "@/lib/game";
 import { getAiBid, getAiPlay, getAiTrumpCard } from "@/lib/ai";
+import { roomApi } from "@/lib/api-client";
 import { sounds } from "@/lib/sounds";
 import Hand from "./Hand";
 import TrickArea from "./TrickArea";
@@ -17,6 +18,7 @@ import Confetti from "./Confetti";
 
 const AI_DELAY = 700;
 const TRICK_PAUSE = 1400;
+const POLL_MS = 700;
 
 const DIFF_LABELS = { easy: "ROOKIE", medium: "STANDARD", hard: "SHARK" };
 const DIFF_COLORS = { easy: "#7a9b8a", medium: "#6b8aad", hard: "#ad6b6b" };
@@ -26,7 +28,7 @@ const DIFF_DESC = {
   hard: "Reads you like a book",
 };
 
-// Player info
+// Player info (solo mode defaults)
 const PLAYER_INFO = {
   [SOUTH]: { name: 'YOU',   initial: 'Y', color: '#6b8aad' },
   [NORTH]: { name: 'ACE',   initial: 'A', color: '#6b8aad' },
@@ -34,7 +36,30 @@ const PLAYER_INFO = {
   [EAST]:  { name: 'BLITZ', initial: 'B', color: '#ad6b6b' },
 };
 
+// Display positions
+const DISPLAY_POSITIONS = [SOUTH, WEST, NORTH, EAST];
+
 export default function Game() {
+  // ── Mode ──
+  const [mode, setMode] = useState(null); // null | 'solo' | 'online'
+  const [roomCode, setRoomCode] = useState(null);
+  const [playerId] = useState(() =>
+    typeof window !== 'undefined' ? (sessionStorage.getItem('pitchPlayerId') || (() => {
+      const id = Math.random().toString(36).slice(2, 10);
+      sessionStorage.setItem('pitchPlayerId', id);
+      return id;
+    })()) : 'ssr'
+  );
+  const [playerName, setPlayerName] = useState('');
+  const [mySeat, setMySeat] = useState(SOUTH);
+  const [onlineNames, setOnlineNames] = useState({}); // { [seat]: name }
+  const [lobbyAction, setLobbyAction] = useState(null); // 'create' | 'join'
+  const [joinCode, setJoinCode] = useState('');
+  const [lobbyError, setLobbyError] = useState('');
+  const [waiting, setWaiting] = useState(false);
+  const [rematchState, setRematchState] = useState({ p1: false, p2: false });
+  const [copied, setCopied] = useState(false);
+
   // ── Screen ──
   const [screen, setScreen] = useState("lobby");
   const [difficulty, setDifficulty] = useState("medium");
@@ -51,7 +76,7 @@ export default function Game() {
   const [currentBidder, setCurrentBidder] = useState(null);
   const [bids, setBids] = useState([]);
   const [highBid, setHighBid] = useState({ seat: null, amount: 0 });
-  const [bidBubbles, setBidBubbles] = useState({}); // { [seat]: "BID 3" | "PASS" }
+  const [bidBubbles, setBidBubbles] = useState({});
 
   // ── Trick play ──
   const [trumpSuit, setTrumpSuit] = useState(null);
@@ -77,6 +102,27 @@ export default function Game() {
   const [audioReady, setAudioReady] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const timerRef = useRef(null);
+  const pollRef = useRef(null);
+  const lastStateRef = useRef(null); // Track previous poll state for sound triggers
+
+  // ── Seat rotation for multiplayer ──
+  const displaySeat = useCallback((serverSeat) => {
+    if (mode !== 'online') return serverSeat;
+    return (serverSeat - mySeat + 4) % 4;
+  }, [mode, mySeat]);
+
+  const serverSeat = useCallback((displayPos) => {
+    if (mode !== 'online') return displayPos;
+    return (displayPos + mySeat) % 4;
+  }, [mode, mySeat]);
+
+  // Get player name for a seat
+  const getPlayerName = useCallback((seat) => {
+    if (mode === 'online' && onlineNames[seat]) {
+      return seat === mySeat ? 'YOU' : onlineNames[seat];
+    }
+    return PLAYER_INFO[seat]?.name || 'Unknown';
+  }, [mode, mySeat, onlineNames]);
 
   // ── Audio init ──
   const initAudio = useCallback(async () => {
@@ -88,12 +134,185 @@ export default function Game() {
 
   // ── Cleanup ──
   useEffect(() => {
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
+
+  // ═══════════════════════════════════════
+  // ── ONLINE MODE: POLLING ──
+  // ═══════════════════════════════════════
+
+  const applyServerState = useCallback((state) => {
+    if (state.error) return;
+    const prev = lastStateRef.current;
+
+    setMySeat(state.mySeat);
+    setWaiting(state.waiting);
+    setOnlineNames(state.playerNames || {});
+    setRematchState(state.rematch || { p1: false, p2: false });
+
+    if (state.waiting) {
+      setScreen('playing'); // show "waiting" overlay
+      return;
+    }
+
+    // Map server phase to screen
+    if (state.phase === 'gameOver') {
+      setScreen('gameOver');
+    } else if (state.phase === 'handOver') {
+      setScreen('handOver');
+    } else if (state.phase !== 'waiting') {
+      setScreen('playing');
+    }
+
+    // Sound triggers on state changes
+    if (prev) {
+      if (state.phase === 'bidding' && prev.phase !== 'bidding') sounds.shuffle();
+      if (state.trickPlays?.length > prev.trickPlays?.length) sounds.cardPlay();
+      if (state.trickWinner !== null && prev.trickWinner === null) sounds.trickWon();
+      if (state.phase === 'trickPlay' && state.currentPlayer === state.mySeat &&
+          (prev.currentPlayer !== state.mySeat || prev.phase !== 'trickPlay')) sounds.turn();
+      if (state.phase === 'bidding' && state.currentBidder === state.mySeat &&
+          (prev.currentBidder !== state.mySeat || prev.phase !== 'bidding')) sounds.turn();
+      if (state.phase === 'pitching' && state.currentPlayer === state.mySeat &&
+          prev.phase !== 'pitching') sounds.turn();
+      // Bid sounds
+      if (state.bids?.length > (prev.bids?.length || 0)) {
+        const lastBid = state.bids[state.bids.length - 1];
+        if (lastBid.bid > 0) sounds.bidMade();
+        else sounds.bidPass();
+      }
+    }
+
+    // Update game state
+    setPhase(state.phase);
+    setDealer(state.dealer);
+    setTrumpSuit(state.trumpSuit);
+    setCurrentPlayer(state.currentPlayer);
+    setCurrentBidder(state.currentBidder);
+    setBids(state.bids || []);
+    setHighBid(state.highBid || { seat: -1, amount: 0 });
+    setBidBubbles(state.bidBubbles || {});
+    setTrickPlays(state.trickPlays || []);
+    setTrickNumber(state.trickNumber || 1);
+    setTrickWinner(state.trickWinner);
+    setScores(state.scores || { [TEAM_A]: 0, [TEAM_B]: 0 });
+    setHandNumber(state.handNumber || 0);
+    setHandResult(state.handResult);
+    setWasSet(state.wasSet || false);
+    setGameWinner(state.gameWinner);
+    setCutCards(state.cutCards || []);
+    setCutWinner(state.cutWinner);
+    setStatusMsg(state.statusMsg || '');
+    setBiddingTeam(state.highBid?.seat !== undefined ? getTeam(state.highBid.seat) : null);
+    setBidAmount(state.highBid?.amount || 0);
+
+    // Set hands for display — only my hand is real, others are faceDown by count
+    if (state.myHand) {
+      const newHands = [[], [], [], []];
+      newHands[state.mySeat] = state.myHand;
+      // For other seats, create placeholder arrays matching their card count
+      for (let s = 0; s < 4; s++) {
+        if (s !== state.mySeat) {
+          newHands[s] = new Array(state.handCounts?.[s] || 0).fill(null);
+        }
+      }
+      setHands(newHands);
+    }
+
+    // Handle confetti
+    if (state.gameWinner !== null && !prev?.gameWinner) {
+      if (getTeam(state.mySeat) === state.gameWinner) {
+        sounds.win();
+        setShowConfetti(true);
+        setTimeout(() => setShowConfetti(false), 4000);
+      } else {
+        sounds.lose();
+      }
+    }
+
+    // Handle set back sound
+    if (state.phase === 'handOver' && prev?.phase !== 'handOver') {
+      if (state.wasSet) sounds.setBack();
+      else sounds.madeIt();
+    }
+
+    lastStateRef.current = state;
+  }, []);
+
+  // Start/stop polling
+  useEffect(() => {
+    if (mode !== 'online' || !roomCode) return;
+
+    const poll = async () => {
+      try {
+        const state = await roomApi.poll(roomCode, playerId);
+        applyServerState(state);
+      } catch (e) {
+        console.error('Poll error:', e);
+      }
+    };
+
+    poll(); // immediate first poll
+    pollRef.current = setInterval(poll, POLL_MS);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [mode, roomCode, playerId, applyServerState]);
+
+  // ═══════════════════════════════════════
+  // ── LOBBY ACTIONS ──
+  // ═══════════════════════════════════════
+
+  const createRoom = useCallback(async () => {
+    setLobbyError('');
+    try {
+      const res = await roomApi.create(playerId, playerName, difficulty);
+      if (res.error) {
+        setLobbyError(res.error);
+        return;
+      }
+      setRoomCode(res.roomCode);
+      setMySeat(res.mySeat);
+      setMode('online');
+      setWaiting(true);
+      setScreen('playing');
+    } catch (e) {
+      setLobbyError('Failed to create room');
+    }
+  }, [playerId, playerName, difficulty]);
+
+  const joinRoom = useCallback(async () => {
+    setLobbyError('');
+    if (joinCode.length !== 4) {
+      setLobbyError('Code must be 4 characters');
+      return;
+    }
+    try {
+      const res = await roomApi.join(joinCode, playerId, playerName);
+      if (res.error) {
+        setLobbyError(res.error);
+        return;
+      }
+      setRoomCode(res.roomCode);
+      setMySeat(res.mySeat);
+      setMode('online');
+      setScreen('playing');
+    } catch (e) {
+      setLobbyError('Failed to join room');
+    }
+  }, [joinCode, playerId, playerName]);
+
+  // ═══════════════════════════════════════
+  // ── SOLO MODE (existing logic, unchanged) ──
+  // ═══════════════════════════════════════
 
   // ── Go to lobby ──
   const goToLobby = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (pollRef.current) clearInterval(pollRef.current);
+    setMode(null);
+    setRoomCode(null);
     setScreen("lobby");
     setPhase("idle");
     setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
@@ -101,11 +320,19 @@ export default function Game() {
     setDealer(EAST);
     setGameWinner(null);
     setShowConfetti(false);
+    setWaiting(false);
+    setLobbyAction(null);
+    setJoinCode('');
+    setLobbyError('');
+    setOnlineNames({});
+    lastStateRef.current = null;
   }, []);
 
-  // ── Start game ──
+  // ── Start solo game ──
   const startGame = useCallback((diff) => {
+    setMode('solo');
     setDifficulty(diff);
+    setMySeat(SOUTH);
     setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
     setHandNumber(1);
     setGameWinner(null);
@@ -114,15 +341,14 @@ export default function Game() {
     setPhase("cutForDeal");
   }, []);
 
-  // ── CUT FOR DEAL ──
+  // ── CUT FOR DEAL (solo) ──
   useEffect(() => {
-    if (phase !== "cutForDeal") return;
+    if (mode !== 'solo' || phase !== "cutForDeal") return;
 
     const deck = shuffleDeck(createDeck());
     const order = [SOUTH, WEST, NORTH, EAST];
     const cards = order.map((seat, i) => ({ player: seat, card: deck[i] }));
 
-    // Determine winner upfront (highest rank, suit tiebreak: S>H>D>C)
     const suitRank = { S: 3, H: 2, D: 1, C: 0 };
     const winner = cards.reduce((best, curr) => {
       if (curr.card.rank > best.card.rank) return curr;
@@ -137,7 +363,6 @@ export default function Game() {
 
     const timeouts = [];
 
-    // Deal one card at a time
     cards.forEach((c, i) => {
       timeouts.push(setTimeout(() => {
         setCutCards(prev => [...prev, c]);
@@ -145,14 +370,12 @@ export default function Game() {
       }, 600 + i * 450));
     });
 
-    // Highlight winner
     timeouts.push(setTimeout(() => {
       setCutWinner(winner.player);
       setStatusMsg(`${PLAYER_INFO[winner.player].name} deals first`);
       sounds.trickWon();
     }, 600 + 4 * 450 + 400));
 
-    // Transition to dealing
     timeouts.push(setTimeout(() => {
       setDealer(winner.player);
       setCutCards([]);
@@ -161,11 +384,11 @@ export default function Game() {
     }, 600 + 4 * 450 + 400 + 2000));
 
     return () => timeouts.forEach(t => clearTimeout(t));
-  }, [phase]);
+  }, [mode, phase]);
 
-  // ── DEALING ──
+  // ── DEALING (solo) ──
   useEffect(() => {
-    if (screen !== "playing" || phase !== "dealing") return;
+    if (mode !== 'solo' || screen !== "playing" || phase !== "dealing") return;
 
     const dealt = dealHands(dealer);
     setOriginalHands(dealt.map(h => [...h]));
@@ -197,12 +420,12 @@ export default function Game() {
     }, 800);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [screen, phase, dealer]);
+  }, [mode, screen, phase, dealer]);
 
-  // ── BIDDING (AI) ──
+  // ── BIDDING AI (solo) ──
   useEffect(() => {
-    if (phase !== "bidding" || currentBidder === null || currentBidder === SOUTH) return;
-    if (bids.length >= 4) return; // Guard: bidding already complete
+    if (mode !== 'solo' || phase !== "bidding" || currentBidder === null || currentBidder === SOUTH) return;
+    if (bids.length >= 4) return;
 
     timerRef.current = setTimeout(() => {
       const isD = currentBidder === dealer;
@@ -227,7 +450,6 @@ export default function Game() {
       setBids(newBids);
 
       if (newBids.length >= 4) {
-        // Bidding complete — transition to pitching phase (no nested timeout)
         const winBid = newHigh;
         setBiddingTeam(getTeam(winBid.seat));
         setBidAmount(winBid.amount);
@@ -250,11 +472,11 @@ export default function Game() {
     }, AI_DELAY);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [phase, currentBidder, bids, highBid, dealer, difficulty, hands]);
+  }, [mode, phase, currentBidder, bids, highBid, dealer, difficulty, hands]);
 
-  // ── AI PITCHING (bid winner sets trump) ──
+  // ── AI PITCHING (solo) ──
   useEffect(() => {
-    if (phase !== "pitching" || currentPlayer === null || currentPlayer === SOUTH) return;
+    if (mode !== 'solo' || phase !== "pitching" || currentPlayer === null || currentPlayer === SOUTH) return;
 
     timerRef.current = setTimeout(() => {
       const preferred = getAiBid(hands[currentPlayer], 0, false, false, difficulty).preferredSuit;
@@ -279,15 +501,14 @@ export default function Game() {
     }, 600);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [phase, currentPlayer, hands, difficulty]);
+  }, [mode, phase, currentPlayer, hands, difficulty]);
 
-  // ── TRICK PLAY (AI) ──
+  // ── TRICK PLAY AI (solo) ──
   useEffect(() => {
-    if (phase !== "trickPlay" || currentPlayer === null || currentPlayer === SOUTH) return;
+    if (mode !== 'solo' || phase !== "trickPlay" || currentPlayer === null || currentPlayer === SOUTH) return;
     if (trickPlays.length >= 4) return;
 
     timerRef.current = setTimeout(() => {
-      const ledSuit = trickPlays.length > 0 ? trickPlays[0].card.suit : null;
       const card = getAiPlay(
         hands[currentPlayer], trumpSuit, trickPlays, currentPlayer, capturedTricks, difficulty
       );
@@ -317,16 +538,15 @@ export default function Game() {
     }, AI_DELAY);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [phase, currentPlayer, trickPlays, trumpSuit, capturedTricks, difficulty, hands]);
+  }, [mode, phase, currentPlayer, trickPlays, trumpSuit, capturedTricks, difficulty, hands]);
 
-  // ── TRICK COLLECT ──
+  // ── TRICK COLLECT (solo) ──
   useEffect(() => {
-    if (phase !== "trickCollect") return;
-    if (trickPlays.length < 4) return; // Guard: already collected
+    if (mode !== 'solo' || phase !== "trickCollect") return;
+    if (trickPlays.length < 4) return;
 
     const winner = evaluateTrick(trickPlays, trumpSuit);
     setTrickWinner(winner);
-    const winTeam = getTeam(winner);
     setStatusMsg(`${SEAT_NAMES[winner]} wins the trick!`);
     sounds.trickWon();
 
@@ -338,7 +558,6 @@ export default function Game() {
       setTrickWinner(null);
 
       if (trickNumber >= 6) {
-        // Hand complete
         const result = scoreHand(originalHands, newCaptured, trumpSuit);
         const { newScores, wasSet: ws, gameWinner: gw } = updateScores(
           scores, biddingTeam, bidAmount, result
@@ -378,11 +597,18 @@ export default function Game() {
     }, TRICK_PAUSE);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [phase, trickPlays, trumpSuit, trickNumber, capturedTricks, originalHands, scores, biddingTeam, bidAmount]);
+  }, [mode, phase, trickPlays, trumpSuit, trickNumber, capturedTricks, originalHands, scores, biddingTeam, bidAmount]);
 
   // ── Human: make bid ──
   const makeBid = useCallback((amount) => {
     initAudio();
+
+    if (mode === 'online') {
+      roomApi.bid(roomCode, playerId, amount);
+      return;
+    }
+
+    // Solo mode
     const bubbleText = amount > 0 ? `BID ${amount}` : "PASS";
     setBidBubbles(prev => ({ ...prev, [SOUTH]: bubbleText }));
 
@@ -412,13 +638,19 @@ export default function Game() {
       setCurrentBidder(next);
       setStatusMsg(`${SEAT_NAMES[next]} is bidding...`);
     }
-  }, [bids, highBid, hands, difficulty, initAudio]);
+  }, [mode, roomCode, playerId, bids, highBid, initAudio]);
 
   // ── Human: play card ──
   const playCard = useCallback((card) => {
     initAudio();
     sounds.cardPlay();
 
+    if (mode === 'online') {
+      roomApi.play(roomCode, playerId, card);
+      return;
+    }
+
+    // Solo mode
     if (phase === "pitching") {
       setTrumpSuit(card.suit);
       setPhase("trickPlay");
@@ -439,18 +671,23 @@ export default function Game() {
       setCurrentPlayer(np);
       setStatusMsg(`${SEAT_NAMES[np]} is playing...`);
     }
-  }, [phase, trickPlays, initAudio]);
+  }, [mode, roomCode, playerId, phase, trickPlays, initAudio]);
 
-  // ── Next hand ──
+  // ── Next hand (solo) ──
   const nextHand = useCallback(() => {
+    if (mode === 'online') return; // handled by server
     setDealer(prev => nextDealer(prev));
     setHandNumber(prev => prev + 1);
     setPhase("dealing");
     setScreen("playing");
-  }, []);
+  }, [mode]);
 
-  // ── Play again ──
+  // ── Play again (solo) ──
   const playAgain = useCallback(() => {
+    if (mode === 'online') {
+      roomApi.rematch(roomCode, playerId);
+      return;
+    }
     setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
     setHandNumber(1);
     setGameWinner(null);
@@ -458,51 +695,68 @@ export default function Game() {
     setHands([[], [], [], []]);
     setPhase("cutForDeal");
     setScreen("playing");
-  }, []);
+  }, [mode, roomCode, playerId]);
 
   // ── Derived state ──
+  const isOnline = mode === 'online';
+  const myActualSeat = isOnline ? mySeat : SOUTH;
+
   const ledSuit = trickPlays.length > 0 ? trickPlays[0].card.suit : null;
-  const playableCards = (phase === "trickPlay" && currentPlayer === SOUTH)
-    ? getPlayableCards(hands[SOUTH], trumpSuit, ledSuit)
-    : (phase === "pitching" && currentPlayer === SOUTH)
-      ? [...hands[SOUTH]]
+
+  // In online mode, server provides playable cards; in solo, compute locally
+  const playableCards = isOnline
+    ? (lastStateRef.current?.playableCards || [])
+    : (phase === "trickPlay" && currentPlayer === SOUTH)
+      ? getPlayableCards(hands[SOUTH], trumpSuit, ledSuit)
+      : (phase === "pitching" && currentPlayer === SOUTH)
+        ? [...hands[SOUTH]]
+        : [];
+
+  const validBids = isOnline
+    ? (lastStateRef.current?.validBids || [])
+    : (phase === "bidding" && currentBidder === SOUTH)
+      ? getValidBids(
+          highBid.amount,
+          dealer === SOUTH,
+          bids.length === 3 && bids.every(b => b.bid === 0)
+        )
       : [];
 
-  const validBids = (phase === "bidding" && currentBidder === SOUTH)
-    ? getValidBids(
-        highBid.amount,
-        dealer === SOUTH,
-        bids.length === 3 && bids.every(b => b.bid === 0)
-      )
-    : [];
-
   // ── Derived UI state ──
-  const isHumanTurn = (phase === 'trickPlay' || phase === 'pitching') && currentPlayer === SOUTH;
+  const isHumanTurn = (phase === 'trickPlay' || phase === 'pitching') && currentPlayer === myActualSeat;
+  const isHumanBidding = phase === 'bidding' && currentBidder === myActualSeat;
   const mustFollow = isHumanTurn && ledSuit && ledSuit !== trumpSuit &&
-    playableCards.length < hands[SOUTH].length;
-  const livePoints = getLivePoints(originalHands, capturedTricks, trumpSuit);
+    playableCards.length < hands[myActualSeat]?.length;
+  const livePoints = mode === 'solo' ? getLivePoints(originalHands, capturedTricks, trumpSuit) : null;
 
   const getDimLevel = (seat) => {
     if (!isHumanTurn) return 'primary';
-    return seat === SOUTH ? 'primary' : 'background';
+    return seat === myActualSeat ? 'primary' : 'background';
   };
 
-  // Is this player leading the current trick?
   const isLeading = (seat) => {
     return (phase === 'trickPlay' && currentPlayer === seat && trickPlays.length === 0) ||
       (phase === 'pitching' && currentPlayer === seat);
   };
 
-  // ── Seat label renderer — glowing pill when active ──
-  const renderSeatLabel = (seat) => {
-    const info = PLAYER_INFO[seat];
-    const isActive = (phase === 'trickPlay' && currentPlayer === seat) ||
-      (phase === 'pitching' && currentPlayer === seat) ||
-      (phase === 'bidding' && currentBidder === seat);
-    const leading = isLeading(seat);
-    const isD = dealer === seat;
-    const bubble = bidBubbles[seat];
-    const teamColor = getTeam(seat) === TEAM_A ? '#6b8aad' : '#ad6b6b';
+  // Get display info for a seat, accounting for rotation
+  const getSeatInfo = useCallback((displayPos) => {
+    const svrSeat = serverSeat(displayPos);
+    const name = getPlayerName(svrSeat);
+    const teamColor = getTeam(svrSeat) === TEAM_A ? '#6b8aad' : '#ad6b6b';
+    const backColor = getTeam(svrSeat) === TEAM_A ? 'blue' : 'red';
+    return { svrSeat, name, teamColor, backColor };
+  }, [serverSeat, getPlayerName]);
+
+  // ── Seat label renderer ──
+  const renderSeatLabel = (displayPos) => {
+    const { svrSeat, name } = getSeatInfo(displayPos);
+    const isActive = (phase === 'trickPlay' && currentPlayer === svrSeat) ||
+      (phase === 'pitching' && currentPlayer === svrSeat) ||
+      (phase === 'bidding' && currentBidder === svrSeat);
+    const leading = isLeading(svrSeat);
+    const isD = dealer === svrSeat;
+    const bubble = bidBubbles[svrSeat];
 
     return (
       <div style={{
@@ -514,7 +768,6 @@ export default function Game() {
         border: isActive ? '1px solid rgba(200,170,80,0.2)' : '1px solid transparent',
         transition: 'all 0.3s',
       }}>
-        {/* Active dot */}
         {isActive && (
           <div style={{
             width: 5, height: 5, borderRadius: '50%',
@@ -528,7 +781,7 @@ export default function Game() {
           color: isActive ? '#c8aa50' : 'rgba(255,255,255,0.35)',
           letterSpacing: 1.5, textTransform: 'uppercase',
           transition: 'color 0.3s',
-        }}>{info.name}</span>
+        }}>{name}</span>
         {isD && (
           <span style={{
             fontSize: 'clamp(8px, 2vw, 9px)', fontWeight: 800,
@@ -581,6 +834,15 @@ export default function Game() {
     </div>
   );
 
+  // ── Rotate trick plays for display ──
+  const displayTrickPlays = isOnline
+    ? trickPlays.map(p => ({ ...p, player: displaySeat(p.player) }))
+    : trickPlays;
+
+  const displayCutCards = isOnline
+    ? cutCards.map(c => ({ ...c, player: displaySeat(c.player) }))
+    : cutCards;
+
   // ═══════════════════════════════════════
   // ── RENDER ──
   // ═══════════════════════════════════════
@@ -590,10 +852,7 @@ export default function Game() {
       style={{ height: '100dvh' }}
       onClick={initAudio}>
 
-      {/* Scanlines */}
       <div className="scanlines" />
-
-      {/* Confetti */}
       {showConfetti && <Confetti />}
 
       {/* ── LOBBY ── */}
@@ -604,7 +863,6 @@ export default function Game() {
             style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
                      boxShadow: '0 20px 60px rgba(0,0,0,0.5)', backdropFilter: 'blur(20px)',
                      WebkitBackdropFilter: 'blur(20px)' }}>
-            {/* Accent line */}
             <div style={{ height: 1, width: '100%', background: 'linear-gradient(90deg, transparent, rgba(200,170,80,0.3), transparent)' }} />
             <div style={{
               padding: 'clamp(24px, 6vw, 36px) clamp(20px, 5vw, 28px)',
@@ -633,7 +891,6 @@ export default function Game() {
                 </div>
               </div>
 
-              {/* Minimal suit icons */}
               <div style={{ display: 'flex', gap: 16, justifyContent: 'center', margin: '4px 0' }}>
                 {[
                   { s: '\u2660', c: 'rgba(255,255,255,0.15)' },
@@ -645,26 +902,166 @@ export default function Game() {
                 ))}
               </div>
 
-              <button className="btn w-full" onClick={() => setScreen("difficulty")}
-                style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-                PLAY
-              </button>
+              {/* Mode not selected yet */}
+              {!lobbyAction && (
+                <>
+                  <button className="btn w-full" onClick={() => setScreen("difficulty")}
+                    style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
+                    PLAY SOLO
+                  </button>
 
-              <button className="btn btn-sm w-full" onClick={() => setScreen("howToPlay")}
-                style={{ color: 'rgba(255,255,255,0.35)', borderColor: 'rgba(255,255,255,0.08)' }}>
-                HOW TO PLAY
-              </button>
+                  <button className="btn w-full" onClick={() => setLobbyAction('enterName')}
+                    style={{ color: '#6b8aad', borderColor: 'rgba(107,138,173,0.3)' }}>
+                    PLAY ONLINE
+                  </button>
 
-              <div style={{ fontSize: 'clamp(7px, 1.8vw, 9px)', color: 'rgba(255,255,255,0.15)', textAlign: 'center', lineHeight: 1.6 }}>
-                BID. PITCH TRUMP. TAKE TRICKS.<br />
-                FIRST TEAM TO {WIN_SCORE} WINS.
-              </div>
+                  <button className="btn btn-sm w-full" onClick={() => setScreen("howToPlay")}
+                    style={{ color: 'rgba(255,255,255,0.35)', borderColor: 'rgba(255,255,255,0.08)' }}>
+                    HOW TO PLAY
+                  </button>
+                </>
+              )}
+
+              {/* Enter name */}
+              {lobbyAction === 'enterName' && (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                    ENTER YOUR NAME
+                  </div>
+                  <input
+                    type="text"
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value.slice(0, 12))}
+                    placeholder="Your name"
+                    maxLength={12}
+                    autoFocus
+                    style={{
+                      width: '100%', padding: '10px 14px',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, color: '#e0e0e0',
+                      fontSize: 16, textAlign: 'center',
+                      outline: 'none', fontFamily: 'Inter, sans-serif',
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
+                  />
+                  <button className="btn w-full"
+                    onClick={() => { if (playerName.trim()) setLobbyAction('chooseAction'); }}
+                    disabled={!playerName.trim()}
+                    style={{
+                      color: playerName.trim() ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: playerName.trim() ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                    }}>
+                    CONTINUE
+                  </button>
+                  <button className="btn btn-sm" onClick={() => setLobbyAction(null)}
+                    style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    BACK
+                  </button>
+                </div>
+              )}
+
+              {/* Create or Join */}
+              {lobbyAction === 'chooseAction' && (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                    PLAYING AS {playerName.toUpperCase()}
+                  </div>
+
+                  {/* Difficulty selector */}
+                  <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+                    {Object.entries(DIFF_LABELS).map(([key, label]) => (
+                      <button key={key} className="btn btn-sm"
+                        onClick={() => setDifficulty(key)}
+                        style={{
+                          flex: 1,
+                          color: difficulty === key ? DIFF_COLORS[key] : 'rgba(255,255,255,0.2)',
+                          borderColor: difficulty === key ? DIFF_COLORS[key] + '44' : 'rgba(255,255,255,0.06)',
+                          background: difficulty === key ? DIFF_COLORS[key] + '10' : 'transparent',
+                          fontSize: 9,
+                        }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -8 }}>
+                    AI PARTNER DIFFICULTY
+                  </div>
+
+                  <button className="btn w-full" onClick={createRoom}
+                    style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
+                    CREATE ROOM
+                  </button>
+                  <button className="btn w-full" onClick={() => setLobbyAction('joinRoom')}
+                    style={{ color: '#6b8aad', borderColor: 'rgba(107,138,173,0.3)' }}>
+                    JOIN ROOM
+                  </button>
+                  {lobbyError && (
+                    <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
+                  )}
+                  <button className="btn btn-sm" onClick={() => setLobbyAction('enterName')}
+                    style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    BACK
+                  </button>
+                </div>
+              )}
+
+              {/* Join room */}
+              {lobbyAction === 'joinRoom' && (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                    ENTER ROOM CODE
+                  </div>
+                  <input
+                    type="text"
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 4))}
+                    placeholder="XXXX"
+                    maxLength={4}
+                    autoFocus
+                    style={{
+                      width: '100%', padding: '12px 14px',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, color: '#e0e0e0',
+                      fontSize: 28, textAlign: 'center',
+                      outline: 'none', fontFamily: 'Inter, sans-serif',
+                      letterSpacing: 12, fontWeight: 700,
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
+                  />
+                  <button className="btn w-full" onClick={joinRoom}
+                    disabled={joinCode.length !== 4}
+                    style={{
+                      color: joinCode.length === 4 ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: joinCode.length === 4 ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                    }}>
+                    JOIN
+                  </button>
+                  {lobbyError && (
+                    <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
+                  )}
+                  <button className="btn btn-sm" onClick={() => { setLobbyAction('chooseAction'); setLobbyError(''); }}
+                    style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    BACK
+                  </button>
+                </div>
+              )}
+
+              {!lobbyAction && (
+                <div style={{ fontSize: 'clamp(7px, 1.8vw, 9px)', color: 'rgba(255,255,255,0.15)', textAlign: 'center', lineHeight: 1.6 }}>
+                  BID. PITCH TRUMP. TAKE TRICKS.<br />
+                  FIRST TEAM TO {WIN_SCORE} WINS.
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ── DIFFICULTY ── */}
+      {/* ── DIFFICULTY (solo) ── */}
       {screen === "difficulty" && (
         <div className="flex flex-col items-center w-full max-w-[320px] px-4 gap-4">
           <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>SELECT DIFFICULTY</div>
@@ -711,7 +1108,6 @@ export default function Game() {
               HOW TO PLAY
             </div>
 
-            {/* Steps */}
             {[
               { num: '1', title: 'TEAMS', color: '#6b8aad',
                 text: 'You and your Partner (across) vs two Opponents. Work together to score points!' },
@@ -761,10 +1157,8 @@ export default function Game() {
       {/* ── PLAYING ── */}
       {screen === "playing" && (
         <>
-          {/* Vignette — edge darkening */}
           <div className="vignette" />
 
-          {/* Overhead light — warm glow from above */}
           <div style={{
             position: 'fixed', top: '-10%', left: '50%', transform: 'translateX(-50%)',
             width: '60%', height: '40%',
@@ -772,13 +1166,50 @@ export default function Game() {
             pointerEvents: 'none', zIndex: 1,
           }} />
 
-          {/* Full-screen game area — the table IS the screen */}
+          {/* Waiting for opponent overlay */}
+          {isOnline && waiting && (
+            <div style={{
+              position: 'fixed', inset: 0,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              zIndex: 50, gap: 16,
+              background: 'rgba(6,14,8,0.95)',
+            }}>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                ROOM CODE
+              </div>
+              <div style={{
+                fontSize: 'clamp(36px, 10vw, 52px)', fontWeight: 700,
+                letterSpacing: 12, color: '#c8aa50',
+                fontFamily: 'Inter, monospace',
+              }}>
+                {roomCode}
+              </div>
+              <button className="btn btn-sm" onClick={() => {
+                navigator.clipboard?.writeText(roomCode);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+                style={{ color: copied ? '#7a9b8a' : 'rgba(255,255,255,0.35)', borderColor: 'rgba(255,255,255,0.1)' }}>
+                {copied ? 'COPIED!' : 'COPY CODE'}
+              </button>
+              <div style={{
+                fontSize: 12, color: 'rgba(255,255,255,0.25)',
+                animation: 'pulse 2s ease-in-out infinite',
+              }}>
+                Waiting for opponent to join...
+              </div>
+              <button className="btn btn-sm" onClick={goToLobby}
+                style={{ color: 'rgba(255,255,255,0.2)', borderColor: 'rgba(255,255,255,0.06)', marginTop: 16 }}>
+                LEAVE
+              </button>
+            </div>
+          )}
+
           <div style={{
             position: 'relative',
             width: '100%', height: '100%',
             maxWidth: 960, margin: '0 auto',
           }}>
-            {/* Scoreboard — minimal, top center */}
             <ScoreBoard
               scores={scores}
               bidInfo={bidAmount > 0 ? { amount: bidAmount, team: biddingTeam } : null}
@@ -788,49 +1219,75 @@ export default function Game() {
               wasSet={wasSet}
             />
 
-            {/* ── NORTH ── */}
-            <div style={{
-              position: 'absolute',
-              top: trumpSuit ? 'clamp(76px, 18vw, 100px)' : 'clamp(38px, 9vw, 52px)',
-              left: '50%', transform: 'translateX(-50%)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 4, zIndex: 10,
-            }}>
-              {renderSeatLabel(NORTH)}
-              <Hand cards={hands[NORTH]} position="north" faceDown
-                isCurrentTurn={currentPlayer === NORTH && phase === 'trickPlay'}
-                dimLevel={getDimLevel(NORTH)} backColor="blue" />
-            </div>
+            {/* Room code badge (online) */}
+            {isOnline && !waiting && (
+              <div style={{
+                position: 'absolute', top: 6, right: 8,
+                fontSize: 9, color: 'rgba(255,255,255,0.15)',
+                letterSpacing: 2, fontWeight: 500, zIndex: 20,
+              }}>
+                {roomCode}
+              </div>
+            )}
 
-            {/* ── WEST ── */}
-            <div style={{
-              position: 'absolute',
-              left: 'clamp(12px, 3vw, 28px)',
-              top: '42%', transform: 'translateY(-50%)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 4, zIndex: 10,
-            }}>
-              {renderSeatLabel(WEST)}
-              <Hand cards={hands[WEST]} position="west" faceDown
-                isCurrentTurn={currentPlayer === WEST && phase === 'trickPlay'}
-                dimLevel={getDimLevel(WEST)} backColor="red" />
-            </div>
+            {/* ── NORTH (display position) ── */}
+            {(() => {
+              const { svrSeat, backColor } = getSeatInfo(NORTH);
+              return (
+                <div style={{
+                  position: 'absolute',
+                  top: trumpSuit ? 'clamp(76px, 18vw, 100px)' : 'clamp(38px, 9vw, 52px)',
+                  left: '50%', transform: 'translateX(-50%)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  gap: 4, zIndex: 10,
+                }}>
+                  {renderSeatLabel(NORTH)}
+                  <Hand cards={hands[svrSeat]} position="north" faceDown
+                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
+                </div>
+              );
+            })()}
 
-            {/* ── EAST ── */}
-            <div style={{
-              position: 'absolute',
-              right: 'clamp(12px, 3vw, 28px)',
-              top: '42%', transform: 'translateY(-50%)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 4, zIndex: 10,
-            }}>
-              {renderSeatLabel(EAST)}
-              <Hand cards={hands[EAST]} position="east" faceDown
-                isCurrentTurn={currentPlayer === EAST && phase === 'trickPlay'}
-                dimLevel={getDimLevel(EAST)} backColor="red" />
-            </div>
+            {/* ── WEST (display position) ── */}
+            {(() => {
+              const { svrSeat, backColor } = getSeatInfo(WEST);
+              return (
+                <div style={{
+                  position: 'absolute',
+                  left: 'clamp(12px, 3vw, 28px)',
+                  top: '42%', transform: 'translateY(-50%)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  gap: 4, zIndex: 10,
+                }}>
+                  {renderSeatLabel(WEST)}
+                  <Hand cards={hands[svrSeat]} position="west" faceDown
+                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
+                </div>
+              );
+            })()}
 
-            {/* ── TRUMP INDICATOR — large, prominent, above table ── */}
+            {/* ── EAST (display position) ── */}
+            {(() => {
+              const { svrSeat, backColor } = getSeatInfo(EAST);
+              return (
+                <div style={{
+                  position: 'absolute',
+                  right: 'clamp(12px, 3vw, 28px)',
+                  top: '42%', transform: 'translateY(-50%)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  gap: 4, zIndex: 10,
+                }}>
+                  {renderSeatLabel(EAST)}
+                  <Hand cards={hands[svrSeat]} position="east" faceDown
+                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
+                </div>
+              );
+            })()}
+
+            {/* ── TRUMP INDICATOR ── */}
             {trumpSuit && (
               <div style={{
                 position: 'absolute',
@@ -850,11 +1307,13 @@ export default function Game() {
 
             {/* ── TRICK AREA / CUT FOR DEAL ── */}
             <TrickArea
-              trickPlays={phase === 'cutForDeal' ? cutCards : trickPlays}
-              trickWinner={phase === 'cutForDeal' ? cutWinner : trickWinner}
+              trickPlays={phase === 'cutForDeal' ? displayCutCards : displayTrickPlays}
+              trickWinner={phase === 'cutForDeal'
+                ? (cutWinner !== null ? displaySeat(cutWinner) : null)
+                : (trickWinner !== null ? displaySeat(trickWinner) : null)}
             />
 
-            {/* Cut for deal label — fixed near top, prominent when winner found */}
+            {/* Cut for deal label */}
             {phase === 'cutForDeal' && (
               <div style={{
                 position: 'absolute',
@@ -873,7 +1332,12 @@ export default function Game() {
                   whiteSpace: 'nowrap',
                   transition: 'all 0.3s',
                 }}>
-                  {statusMsg}
+                  {isOnline
+                    ? (cutWinner !== null
+                      ? `${getPlayerName(cutWinner)} deals first`
+                      : 'Cutting for deal...')
+                    : statusMsg
+                  }
                 </div>
                 {cutWinner && (
                   <div style={{
@@ -899,8 +1363,8 @@ export default function Game() {
               </div>
             )}
 
-            {/* ── LIVE POINT TRACKER ── */}
-            {trumpSuit && livePoints && (
+            {/* ── LIVE POINT TRACKER (solo only) ── */}
+            {!isOnline && trumpSuit && livePoints && (
               <div className="point-tracker" style={{
                 position: 'absolute',
                 right: 'clamp(12px, 3vw, 24px)',
@@ -931,7 +1395,7 @@ export default function Game() {
               </div>
             )}
 
-            {/* ── SOUTH AREA ── */}
+            {/* ── SOUTH AREA (always the local player) ── */}
             <div style={{
               position: 'absolute',
               bottom: 0, left: 0, right: 0,
@@ -954,14 +1418,14 @@ export default function Game() {
               )}
 
               {/* Pitching prompt */}
-              {phase === 'pitching' && currentPlayer === SOUTH && (
+              {phase === 'pitching' && currentPlayer === myActualSeat && (
                 <div className="status-bar status-bar--follow" style={{ marginBottom: 6 }}>
                   PICK YOUR TRUMP &mdash; PLAY A CARD
                 </div>
               )}
 
               {/* Bid buttons */}
-              {phase === 'bidding' && currentBidder === SOUTH && (
+              {isHumanBidding && validBids.length > 0 && (
                 <div style={{
                   display: 'flex', gap: 'clamp(6px, 2vw, 10px)',
                   flexWrap: 'wrap', justifyContent: 'center',
@@ -984,8 +1448,9 @@ export default function Game() {
                 </div>
               )}
 
-              {/* South hand */}
-              <Hand cards={hands[SOUTH]} position="south"
+              {/* South hand (local player's hand) */}
+              <Hand cards={hands[myActualSeat] || []}
+                position="south"
                 playableCards={playableCards}
                 onCardClick={playCard}
                 isCurrentTurn={isHumanTurn}
@@ -997,12 +1462,12 @@ export default function Game() {
               </div>
 
               {/* Status message */}
-              {!isHumanTurn && statusMsg && (
+              {!isHumanTurn && !isHumanBidding && statusMsg && (
                 <div style={{
                   fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.25)',
                   marginTop: 2, whiteSpace: 'nowrap',
                 }}>
-                  {statusMsg}
+                  {isOnline && statusMsg ? statusMsg : (!isOnline ? statusMsg : '')}
                 </div>
               )}
             </div>
@@ -1021,7 +1486,6 @@ export default function Game() {
             HAND {handNumber} RESULTS
           </div>
 
-          {/* Points breakdown */}
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 1fr',
             gap: 'clamp(4px, 1.5vw, 8px)', width: '100%',
@@ -1046,7 +1510,6 @@ export default function Game() {
             })}
           </div>
 
-          {/* Set back alert */}
           {wasSet && (
             <div style={{
               color: '#ad6b6b', fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 500,
@@ -1055,20 +1518,25 @@ export default function Game() {
             </div>
           )}
 
-          {/* Scores */}
           <div style={{ fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 700 }}>
             <span style={{ color: '#6b8aad' }}>{scores[TEAM_A]}</span>
             <span style={{ color: 'rgba(255,255,255,0.1)', margin: '0 8px', fontSize: '0.7em' }}>/</span>
             <span style={{ color: '#ad6b6b' }}>{scores[TEAM_B]}</span>
           </div>
 
-          <button className="btn" onClick={() => {
-            if (navigator.vibrate) navigator.vibrate(10);
-            nextHand();
-          }}
-            style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-            NEXT HAND
-          </button>
+          {isOnline ? (
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
+              Next hand starting...
+            </div>
+          ) : (
+            <button className="btn" onClick={() => {
+              if (navigator.vibrate) navigator.vibrate(10);
+              nextHand();
+            }}
+              style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
+              NEXT HAND
+            </button>
+          )}
         </div>
       )}
 
@@ -1078,10 +1546,16 @@ export default function Game() {
           style={{ gap: 'clamp(12px, 3vw, 20px)' }}>
           <div style={{
             fontSize: 'clamp(22px, 7vw, 28px)', fontWeight: 700,
-            color: gameWinner === TEAM_A ? '#7a9b8a' : '#ad6b6b',
+            color: (() => {
+              const myTeam = isOnline ? getTeam(mySeat) : TEAM_A;
+              return gameWinner === myTeam ? '#7a9b8a' : '#ad6b6b';
+            })(),
             letterSpacing: 2,
           }}>
-            {gameWinner === TEAM_A ? 'YOU WIN' : 'YOU LOSE'}
+            {(() => {
+              const myTeam = isOnline ? getTeam(mySeat) : TEAM_A;
+              return gameWinner === myTeam ? 'YOU WIN' : 'YOU LOSE';
+            })()}
           </div>
 
           <div style={{ fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 700 }}>
@@ -1094,13 +1568,21 @@ export default function Game() {
             {handNumber} hands played
           </div>
 
+          {isOnline && (
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>
+              {rematchState.p1 && mySeat !== SOUTH && 'Opponent wants rematch'}
+              {rematchState.p2 && mySeat !== WEST && 'Opponent wants rematch'}
+              {((mySeat === SOUTH && rematchState.p1) || (mySeat === WEST && rematchState.p2)) && 'Waiting for opponent...'}
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 'clamp(6px, 2vw, 12px)' }}>
             <button className="btn" onClick={() => {
               if (navigator.vibrate) navigator.vibrate(10);
               playAgain();
             }}
               style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-              PLAY AGAIN
+              {isOnline ? 'REMATCH' : 'PLAY AGAIN'}
             </button>
             <button className="btn btn-sm" onClick={goToLobby}
               style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
