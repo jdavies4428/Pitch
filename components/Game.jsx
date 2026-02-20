@@ -128,10 +128,8 @@ export default function Game() {
 
   // ── Audio init ──
   const initAudio = useCallback(async () => {
-    if (!audioReady) {
-      await sounds.init();
-      setAudioReady(true);
-    }
+    await sounds.init();
+    if (!audioReady) setAudioReady(true);
   }, [audioReady]);
 
   // ── Cleanup ──
