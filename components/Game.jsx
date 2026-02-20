@@ -55,6 +55,7 @@ export default function Game() {
   const [mySeat, setMySeat] = useState(SOUTH);
   const [onlineNames, setOnlineNames] = useState({}); // { [seat]: name }
   const [lobbyAction, setLobbyAction] = useState(null); // 'create' | 'join'
+  const [gameMode, setGameMode] = useState('versus'); // 'versus' | 'coop'
   const [joinCode, setJoinCode] = useState('');
   const [lobbyError, setLobbyError] = useState('');
   const [waiting, setWaiting] = useState(false);
@@ -268,7 +269,7 @@ export default function Game() {
   const createRoom = useCallback(async () => {
     setLobbyError('');
     try {
-      const res = await roomApi.create(playerId, playerName, difficulty);
+      const res = await roomApi.create(playerId, playerName, difficulty, gameMode);
       if (res.error) {
         setLobbyError(res.error);
         return;
@@ -281,7 +282,7 @@ export default function Game() {
     } catch (e) {
       setLobbyError('Failed to create room');
     }
-  }, [playerId, playerName, difficulty]);
+  }, [playerId, playerName, difficulty, gameMode]);
 
   const joinRoom = useCallback(async () => {
     setLobbyError('');
@@ -962,7 +963,34 @@ export default function Game() {
                     ))}
                   </div>
                   <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -8 }}>
-                    AI PARTNER DIFFICULTY
+                    AI DIFFICULTY
+                  </div>
+
+                  {/* Game mode selector */}
+                  <div style={{ display: 'flex', gap: 6, width: '100%', marginTop: 4 }}>
+                    <button className="btn btn-sm"
+                      onClick={() => setGameMode('versus')}
+                      style={{
+                        flex: 1, fontSize: 9,
+                        color: gameMode === 'versus' ? '#ad6b6b' : 'rgba(255,255,255,0.2)',
+                        borderColor: gameMode === 'versus' ? 'rgba(173,107,107,0.4)' : 'rgba(255,255,255,0.06)',
+                        background: gameMode === 'versus' ? 'rgba(173,107,107,0.1)' : 'transparent',
+                      }}>
+                      VS FRIEND
+                    </button>
+                    <button className="btn btn-sm"
+                      onClick={() => setGameMode('coop')}
+                      style={{
+                        flex: 1, fontSize: 9,
+                        color: gameMode === 'coop' ? '#6b8aad' : 'rgba(255,255,255,0.2)',
+                        borderColor: gameMode === 'coop' ? 'rgba(107,138,173,0.4)' : 'rgba(255,255,255,0.06)',
+                        background: gameMode === 'coop' ? 'rgba(107,138,173,0.1)' : 'transparent',
+                      }}>
+                      WITH FRIEND
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -8 }}>
+                    {gameMode === 'versus' ? 'YOU + AI vs FRIEND + AI' : 'YOU + FRIEND vs 2 AIs'}
                   </div>
 
                   <button className="btn w-full" onClick={createRoom}

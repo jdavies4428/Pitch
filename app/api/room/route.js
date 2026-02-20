@@ -20,13 +20,22 @@ function generateCode() {
   return code;
 }
 
-function isAiSeat(seat) {
+function isAiSeat(room, seat) {
+  // Co-op: humans at SOUTH+NORTH, AI at WEST+EAST
+  // Versus: humans at SOUTH+WEST, AI at NORTH+EAST
+  if (room.gameMode === 'coop') {
+    return seat === WEST || seat === EAST;
+  }
   return seat === NORTH || seat === EAST;
+}
+
+function getPlayer2Seat(room) {
+  return room.gameMode === 'coop' ? NORTH : WEST;
 }
 
 function getPlayerSeat(room, playerId) {
   if (room.player1?.id === playerId) return SOUTH;
-  if (room.player2?.id === playerId) return WEST;
+  if (room.player2?.id === playerId) return getPlayer2Seat(room);
   return null;
 }
 
@@ -62,6 +71,7 @@ function filterForPlayer(room, playerId) {
 
   return {
     roomCode: room.roomCode,
+    gameMode: room.gameMode || 'versus',
     mySeat,
     phase: room.phase,
     dealer: room.dealer,
@@ -245,7 +255,7 @@ function processAiTick(room) {
   }
 
   // AI bidding
-  if (room.phase === 'bidding' && isAiSeat(room.currentBidder) && elapsed >= AI_DELAY) {
+  if (room.phase === 'bidding' && isAiSeat(room, room.currentBidder) && elapsed >= AI_DELAY) {
     const seat = room.currentBidder;
     const hand = room.hands[seat];
     const allPassedToDealer = room.bids.length === 3 && (room.highBid?.amount || 0) === 0;
@@ -264,7 +274,7 @@ function processAiTick(room) {
   }
 
   // AI pitching
-  if (room.phase === 'pitching' && isAiSeat(room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === 'pitching' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const preferredSuit = room.aiPreferredSuit?.[seat] || hand[0]?.suit;
@@ -274,7 +284,7 @@ function processAiTick(room) {
   }
 
   // AI trick play
-  if (room.phase === 'trickPlay' && isAiSeat(room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === 'trickPlay' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const card = getAiPlay(
@@ -324,7 +334,8 @@ export async function POST(request) {
 
   // ── CREATE ──
   if (action === 'create') {
-    const { playerId, playerName, difficulty } = body;
+    const { playerId, playerName, difficulty, gameMode } = body;
+    const isCoop = gameMode === 'coop';
     let code;
     let attempts = 0;
     do {
@@ -334,8 +345,15 @@ export async function POST(request) {
       attempts++;
     } while (attempts < 10);
 
+    // Co-op: P1=SOUTH, P2=NORTH (partners), AI=WEST+EAST
+    // Versus: P1=SOUTH, P2=WEST (opponents), AI=NORTH+EAST
+    const playerNames = isCoop
+      ? { [SOUTH]: playerName, [WEST]: 'SPIKE', [NORTH]: 'Waiting...', [EAST]: 'BLITZ' }
+      : { [SOUTH]: playerName, [WEST]: 'Waiting...', [NORTH]: 'ACE', [EAST]: 'BLITZ' };
+
     const room = {
       roomCode: code,
+      gameMode: gameMode || 'versus',
       player1: { id: playerId, name: playerName },
       player2: null,
       dealer: SOUTH,
@@ -363,12 +381,7 @@ export async function POST(request) {
       wasSet: false,
       gameWinner: null,
       rematch: { p1: false, p2: false },
-      playerNames: {
-        [SOUTH]: playerName,
-        [WEST]: 'Waiting...',
-        [NORTH]: 'ACE',
-        [EAST]: 'BLITZ',
-      },
+      playerNames,
       statusMsg: '',
     };
 
@@ -384,10 +397,11 @@ export async function POST(request) {
     if (!room) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });
     }
+    const p2Seat = getPlayer2Seat(room);
     if (room.player2) {
       // Check if it's a rejoin
       if (room.player2.id === playerId) {
-        return NextResponse.json({ roomCode: code, mySeat: WEST });
+        return NextResponse.json({ roomCode: code, mySeat: p2Seat });
       }
       return NextResponse.json({ error: 'Room is full' }, { status: 400 });
     }
@@ -397,11 +411,11 @@ export async function POST(request) {
     }
 
     room.player2 = { id: playerId, name: playerName };
-    room.playerNames[WEST] = playerName;
+    room.playerNames[p2Seat] = playerName;
     startCutForDeal(room);
 
     await setRoom(code, room);
-    return NextResponse.json({ roomCode: code, mySeat: WEST });
+    return NextResponse.json({ roomCode: code, mySeat: p2Seat });
   }
 
   // ── BID ──
@@ -470,7 +484,7 @@ export async function POST(request) {
     if (seat === null) return NextResponse.json({ error: 'Not in room' }, { status: 403 });
 
     if (seat === SOUTH) room.rematch.p1 = true;
-    if (seat === WEST) room.rematch.p2 = true;
+    if (seat === getPlayer2Seat(room)) room.rematch.p2 = true;
 
     if (room.rematch.p1 && room.rematch.p2) {
       // Both want rematch — reset game
