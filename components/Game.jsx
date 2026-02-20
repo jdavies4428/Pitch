@@ -1331,7 +1331,7 @@ export default function Game() {
             {phase === 'bidding' && (() => {
               const bubblePositions = {
                 [SOUTH]: { top: '72%', left: '50%' },
-                [NORTH]: { top: '20%', left: '50%' },
+                [NORTH]: { top: '28%', left: '50%' },
                 [WEST]:  { top: '42%', left: '20%' },
                 [EAST]:  { top: '42%', left: '80%' },
               };
