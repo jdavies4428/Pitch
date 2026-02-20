@@ -1425,7 +1425,7 @@ export default function Game() {
                     backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
                   }}>
                     <span style={{ fontSize: 'clamp(14px, 3.5vw, 16px)' }}>{SUIT_SYMBOLS[ledSuit]}</span>
-                    <span>MUST FOLLOW SUIT</span>
+                    <span>FOLLOW SUIT OR TRUMP</span>
                   </div>
                 ) : (
                   <div style={{
