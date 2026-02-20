@@ -1611,66 +1611,191 @@ export default function Game() {
       )}
 
       {/* ── HAND OVER ── */}
-      {screen === "handOver" && (
-        <div className="flex flex-col items-center px-4"
-          style={{ gap: 'clamp(12px, 3vw, 20px)', maxWidth: 'min(300px, calc(100vw - 32px))' }}>
-          <div style={{ fontSize: 'clamp(9px, 2.5vw, 10px)', color: 'rgba(255,255,255,0.25)', letterSpacing: 3, fontWeight: 500 }}>
-            HAND {handNumber} RESULTS
-          </div>
+      {screen === "handOver" && (() => {
+        const bidTeamIsUs = biddingTeam === TEAM_A;
+        const bidTeamLabel = bidTeamIsUs ? 'US' : 'THEM';
+        const bidTeamColor = bidTeamIsUs ? '#6b8aad' : '#ad6b6b';
+        const pointsWon = handResult?.pointsWon || { [TEAM_A]: 0, [TEAM_B]: 0 };
+        const bidderPts = pointsWon[biddingTeam] || 0;
+        const madeIt = bidderPts >= bidAmount;
+        const points = [
+          { key: 'high', label: 'HIGH', icon: '\u2191' },
+          { key: 'low', label: 'LOW', icon: '\u2193' },
+          { key: 'jack', label: 'JACK', icon: 'J' },
+          { key: 'game', label: 'GAME', icon: '\u2605' },
+        ];
 
-          <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr',
-            gap: 'clamp(4px, 1.5vw, 8px)', width: '100%',
-          }}>
-            {['high', 'low', 'jack', 'game'].map(pt => {
-              const winner = handResult?.[pt];
-              return (
-                <div key={pt} style={{
-                  padding: 'clamp(6px, 1.5vw, 10px) clamp(8px, 2vw, 14px)',
-                  borderRadius: 8, background: 'rgba(255,255,255,0.02)',
-                  border: `1px solid ${winner === TEAM_A ? 'rgba(107,138,173,0.2)' : winner === TEAM_B ? 'rgba(173,107,107,0.2)' : 'rgba(255,255,255,0.04)'}`,
-                }}>
-                  <div style={{ fontSize: 'clamp(8px, 2vw, 9px)', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: 1 }}>{pt}</div>
-                  <div style={{
-                    fontSize: 'clamp(11px, 3vw, 14px)', fontWeight: 600, marginTop: 2,
-                    color: winner === TEAM_A ? '#6b8aad' : winner === TEAM_B ? '#ad6b6b' : 'rgba(255,255,255,0.1)',
-                  }}>
-                    {winner === TEAM_A ? 'US' : winner === TEAM_B ? 'THEM' : '--'}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+        return (
+          <div className="flex flex-col items-center px-4"
+            style={{ gap: 'clamp(14px, 3.5vw, 22px)', maxWidth: 'min(340px, calc(100vw - 24px))' }}>
 
-          {wasSet && (
+            {/* Header */}
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 'clamp(8px, 2vw, 9px)', color: 'rgba(255,255,255,0.2)', letterSpacing: 4, fontWeight: 500 }}>
+                HAND {handNumber}
+              </div>
+              <div style={{
+                fontSize: 'clamp(20px, 6vw, 28px)', fontWeight: 700, marginTop: 4,
+                color: wasSet ? '#ad6b6b' : '#7a9b8a',
+                letterSpacing: 2,
+              }}>
+                {wasSet ? 'SET BACK!' : 'MADE IT!'}
+              </div>
+            </div>
+
+            {/* Bid vs Got meter */}
             <div style={{
-              color: '#ad6b6b', fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 500,
+              width: '100%',
+              padding: 'clamp(12px, 3vw, 18px)',
+              borderRadius: 14,
+              background: 'rgba(255,255,255,0.03)',
+              border: `1px solid ${wasSet ? 'rgba(173,107,107,0.2)' : 'rgba(122,155,138,0.2)'}`,
+              display: 'flex', flexDirection: 'column', gap: 10,
             }}>
-              {biddingTeam === TEAM_A ? 'WE WERE' : 'THEY WERE'} SET BACK! (-{bidAmount})
-            </div>
-          )}
+              {/* Who bid */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.3)', letterSpacing: 2, fontWeight: 500 }}>
+                  {bidTeamLabel} BID
+                </span>
+                <span style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: bidTeamColor }}>
+                  {bidAmount}
+                </span>
+              </div>
 
-          <div style={{ fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 700 }}>
-            <span style={{ color: '#6b8aad' }}>{scores[TEAM_A]}</span>
-            <span style={{ color: 'rgba(255,255,255,0.1)', margin: '0 8px', fontSize: '0.7em' }}>/</span>
-            <span style={{ color: '#ad6b6b' }}>{scores[TEAM_B]}</span>
+              {/* Progress bar: got vs needed */}
+              <div style={{
+                width: '100%', height: 8, borderRadius: 4,
+                background: 'rgba(255,255,255,0.06)',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  width: `${Math.min((bidderPts / Math.max(bidAmount, 1)) * 100, 100)}%`,
+                  height: '100%', borderRadius: 4,
+                  background: madeIt
+                    ? 'linear-gradient(90deg, #7a9b8a, #5a8a6a)'
+                    : 'linear-gradient(90deg, #ad6b6b, #8a4a4a)',
+                  transition: 'width 0.8s cubic-bezier(0.22, 1, 0.36, 1)',
+                }} />
+              </div>
+
+              {/* Got count */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.3)', letterSpacing: 2, fontWeight: 500 }}>
+                  {bidTeamLabel} GOT
+                </span>
+                <span style={{
+                  fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700,
+                  color: madeIt ? '#7a9b8a' : '#ad6b6b',
+                }}>
+                  {bidderPts}
+                </span>
+              </div>
+            </div>
+
+            {/* Point breakdown — 4 columns */}
+            <div style={{
+              display: 'flex', gap: 'clamp(4px, 1.5vw, 8px)', width: '100%',
+            }}>
+              {points.map((pt, i) => {
+                const winner = handResult?.[pt.key];
+                const wonByUs = winner === TEAM_A;
+                const wonByThem = winner === TEAM_B;
+                const isBidTeam = winner === biddingTeam;
+                return (
+                  <div key={pt.key} style={{
+                    flex: 1,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    gap: 4,
+                    padding: 'clamp(8px, 2vw, 12px) 0',
+                    borderRadius: 10,
+                    background: winner !== null
+                      ? (wonByUs ? 'rgba(107,138,173,0.08)' : 'rgba(173,107,107,0.08)')
+                      : 'rgba(255,255,255,0.02)',
+                    border: `1px solid ${winner !== null
+                      ? (wonByUs ? 'rgba(107,138,173,0.2)' : 'rgba(173,107,107,0.2)')
+                      : 'rgba(255,255,255,0.04)'}`,
+                    animation: `slideUp ${0.3 + i * 0.1}s ease-out`,
+                  }}>
+                    <div style={{
+                      width: 'clamp(28px, 8vw, 36px)', height: 'clamp(28px, 8vw, 36px)',
+                      borderRadius: '50%',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700,
+                      background: winner !== null
+                        ? (wonByUs ? 'rgba(107,138,173,0.15)' : 'rgba(173,107,107,0.15)')
+                        : 'rgba(255,255,255,0.03)',
+                      color: winner !== null
+                        ? (wonByUs ? '#6b8aad' : '#ad6b6b')
+                        : 'rgba(255,255,255,0.08)',
+                      border: `1px solid ${winner !== null
+                        ? (isBidTeam ? (madeIt ? 'rgba(122,155,138,0.3)' : 'rgba(173,107,107,0.3)') : 'rgba(255,255,255,0.08)')
+                        : 'rgba(255,255,255,0.04)'}`,
+                    }}>
+                      {winner !== null ? '\u2713' : '\u2014'}
+                    </div>
+                    <span style={{
+                      fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600,
+                      color: 'rgba(255,255,255,0.3)', letterSpacing: 1,
+                    }}>{pt.label}</span>
+                    <span style={{
+                      fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 700,
+                      color: wonByUs ? '#6b8aad' : wonByThem ? '#ad6b6b' : 'rgba(255,255,255,0.08)',
+                    }}>
+                      {wonByUs ? 'US' : wonByThem ? 'THEM' : '--'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Set back penalty */}
+            {wasSet && (
+              <div style={{
+                padding: '8px 16px', borderRadius: 8,
+                background: 'rgba(173,107,107,0.08)',
+                border: '1px solid rgba(173,107,107,0.15)',
+                color: '#ad6b6b',
+                fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 600,
+                letterSpacing: 1, textAlign: 'center',
+              }}>
+                {bidTeamLabel} LOSE {bidAmount} POINTS
+              </div>
+            )}
+
+            {/* Score */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 16,
+              padding: '8px 24px', borderRadius: 12,
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.05)',
+            }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#6b8aad', letterSpacing: 2, fontWeight: 500 }}>US</div>
+                <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#6b8aad' }}>{scores[TEAM_A]}</div>
+              </div>
+              <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: 'rgba(255,255,255,0.1)' }}>:</div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#ad6b6b', letterSpacing: 2, fontWeight: 500 }}>THEM</div>
+                <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#ad6b6b' }}>{scores[TEAM_B]}</div>
+              </div>
+            </div>
+
+            {isOnline ? (
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
+                Next hand starting...
+              </div>
+            ) : (
+              <button className="btn" onClick={() => {
+                if (navigator.vibrate) navigator.vibrate(10);
+                nextHand();
+              }}
+                style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
+                NEXT HAND
+              </button>
+            )}
           </div>
-
-          {isOnline ? (
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
-              Next hand starting...
-            </div>
-          ) : (
-            <button className="btn" onClick={() => {
-              if (navigator.vibrate) navigator.vibrate(10);
-              nextHand();
-            }}
-              style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-              NEXT HAND
-            </button>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── GAME OVER ── */}
       {screen === "gameOver" && (
