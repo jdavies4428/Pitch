@@ -1353,7 +1353,7 @@ export default function Game() {
             {phase === 'cutForDeal' && (
               <div style={{
                 position: 'absolute',
-                top: 'clamp(40px, 10vw, 60px)',
+                top: '28%',
                 left: '50%',
                 transform: 'translateX(-50%)',
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
