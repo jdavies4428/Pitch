@@ -1302,10 +1302,10 @@ export default function Game() {
             {/* ── FLOATING BID BUBBLES ── */}
             {phase === 'bidding' && (() => {
               const bubblePositions = {
-                [SOUTH]: { bottom: 'clamp(170px, 42vw, 230px)', left: '50%' },
-                [NORTH]: { top: 'clamp(110px, 26vw, 150px)', left: '50%' },
-                [WEST]:  { top: '42%', left: 'clamp(90px, 22vw, 140px)' },
-                [EAST]:  { top: '42%', right: 'clamp(90px, 22vw, 140px)', left: 'auto' },
+                [SOUTH]: { top: '72%', left: '50%' },
+                [NORTH]: { top: '20%', left: '50%' },
+                [WEST]:  { top: '42%', left: '20%' },
+                [EAST]:  { top: '42%', left: '80%' },
               };
               return DISPLAY_POSITIONS.map(dp => {
                 const { svrSeat } = getSeatInfo(dp);
@@ -1317,7 +1317,6 @@ export default function Game() {
                   <div key={`bid-bubble-${dp}`} style={{
                     position: 'absolute',
                     ...pos,
-                    ...(pos.left === '50%' ? { transform: 'translate(-50%, -50%)' } : {}),
                     zIndex: 25,
                     animation: 'bidPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
                     pointerEvents: 'none',

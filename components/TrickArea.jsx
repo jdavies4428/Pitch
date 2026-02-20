@@ -38,7 +38,7 @@ export default function TrickArea({ trickPlays, trickWinner }) {
             {isLead && !trickWinner && trickPlays.length < 4 && (
               <div style={{
                 position: 'absolute',
-                bottom: -14,
+                bottom: -22,
                 left: '50%', transform: 'translateX(-50%)',
                 fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 700,
                 color: 'rgba(200,170,80,0.6)',
