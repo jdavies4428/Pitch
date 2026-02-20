@@ -1422,12 +1422,33 @@ export default function Game() {
               {/* Follow-suit / turn status badge */}
               {isHumanTurn && phase === 'trickPlay' && (
                 mustFollow ? (
-                  <div className="status-bar status-bar--follow" style={{ marginBottom: 6 }}>
-                    <span>{SUIT_SYMBOLS[ledSuit]}</span>
+                  <div style={{
+                    marginBottom: 8, padding: 'clamp(6px, 1.5vw, 8px) clamp(16px, 4vw, 24px)',
+                    borderRadius: 20,
+                    background: 'rgba(200,170,80,0.1)',
+                    border: '1px solid rgba(200,170,80,0.25)',
+                    color: '#c8aa50',
+                    fontSize: 'clamp(11px, 3vw, 13px)', fontWeight: 600,
+                    letterSpacing: 1,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    animation: 'slideUp 0.3s ease-out, glowPulse 2s ease-in-out infinite',
+                    backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+                  }}>
+                    <span style={{ fontSize: 'clamp(14px, 3.5vw, 16px)' }}>{SUIT_SYMBOLS[ledSuit]}</span>
                     <span>MUST FOLLOW SUIT</span>
                   </div>
                 ) : (
-                  <div className="status-bar status-bar--turn" style={{ marginBottom: 6 }}>
+                  <div style={{
+                    marginBottom: 8, padding: 'clamp(6px, 1.5vw, 8px) clamp(16px, 4vw, 24px)',
+                    borderRadius: 20,
+                    background: 'rgba(200,170,80,0.08)',
+                    border: '1px solid rgba(200,170,80,0.2)',
+                    color: '#c8aa50',
+                    fontSize: 'clamp(11px, 3vw, 13px)', fontWeight: 600,
+                    letterSpacing: 1.5,
+                    animation: 'slideUp 0.3s ease-out, glowPulse 2s ease-in-out infinite',
+                    backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+                  }}>
                     {trickPlays.length === 0 ? 'YOUR LEAD' : 'YOUR TURN'}
                   </div>
                 )
@@ -1435,32 +1456,63 @@ export default function Game() {
 
               {/* Pitching prompt */}
               {phase === 'pitching' && currentPlayer === myActualSeat && (
-                <div className="status-bar status-bar--follow" style={{ marginBottom: 6 }}>
+                <div style={{
+                  marginBottom: 8, padding: 'clamp(8px, 2vw, 10px) clamp(16px, 4vw, 24px)',
+                  borderRadius: 20,
+                  background: 'rgba(200,170,80,0.1)',
+                  border: '1px solid rgba(200,170,80,0.3)',
+                  color: '#c8aa50',
+                  fontSize: 'clamp(11px, 3vw, 13px)', fontWeight: 600,
+                  letterSpacing: 1,
+                  animation: 'slideUp 0.3s ease-out, glowPulse 2s ease-in-out infinite',
+                  backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+                }}>
                   PICK YOUR TRUMP &mdash; PLAY A CARD
                 </div>
               )}
 
-              {/* Bid buttons */}
+              {/* Bid section — prominent when it's your turn */}
               {isHumanBidding && validBids.length > 0 && (
                 <div style={{
-                  display: 'flex', gap: 'clamp(6px, 2vw, 10px)',
-                  flexWrap: 'wrap', justifyContent: 'center',
-                  maxWidth: 'calc(100vw - 24px)',
-                  marginBottom: 6,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                  marginBottom: 8,
+                  animation: 'slideUp 0.3s ease-out',
                 }}>
-                  {validBids.map(b => (
-                    <button key={b} className="btn btn-sm" onClick={() => {
-                      if (navigator.vibrate) navigator.vibrate(10);
-                      makeBid(b);
-                    }}
-                      style={{
-                        color: b === 0 ? 'rgba(255,255,255,0.3)' : '#c8aa50',
-                        borderColor: b === 0 ? 'rgba(255,255,255,0.1)' : 'rgba(200,170,80,0.3)',
-                        background: 'rgba(0,0,0,0.2)',
-                      }}>
-                      {b === 0 ? 'PASS' : `BID ${b}`}
-                    </button>
-                  ))}
+                  <div style={{
+                    fontSize: 'clamp(12px, 3.5vw, 14px)', fontWeight: 700,
+                    color: '#c8aa50', letterSpacing: 2,
+                    animation: 'glowPulse 2s ease-in-out infinite',
+                    padding: '4px 16px',
+                    borderRadius: 12,
+                    background: 'rgba(200,170,80,0.08)',
+                    border: '1px solid rgba(200,170,80,0.2)',
+                  }}>
+                    YOUR BID
+                  </div>
+                  <div style={{
+                    display: 'flex', gap: 'clamp(8px, 2.5vw, 12px)',
+                    flexWrap: 'wrap', justifyContent: 'center',
+                    maxWidth: 'calc(100vw - 24px)',
+                  }}>
+                    {validBids.map((b, i) => (
+                      <button key={b} className="btn" onClick={() => {
+                        if (navigator.vibrate) navigator.vibrate(10);
+                        makeBid(b);
+                      }}
+                        style={{
+                          color: b === 0 ? 'rgba(255,255,255,0.4)' : '#c8aa50',
+                          borderColor: b === 0 ? 'rgba(255,255,255,0.1)' : 'rgba(200,170,80,0.35)',
+                          background: b === 0 ? 'rgba(0,0,0,0.2)' : 'rgba(200,170,80,0.06)',
+                          fontSize: 'clamp(12px, 3.2vw, 14px)',
+                          fontWeight: 700,
+                          padding: 'clamp(8px, 2vw, 12px) clamp(16px, 4vw, 24px)',
+                          minWidth: b === 0 ? undefined : 'clamp(60px, 16vw, 80px)',
+                          animation: b > 0 ? `slideUp ${0.3 + i * 0.08}s ease-out` : undefined,
+                        }}>
+                        {b === 0 ? 'PASS' : `BID ${b}`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -1488,8 +1540,13 @@ export default function Game() {
               )}
             </div>
 
-            {/* Turn glow */}
-            {isHumanTurn && <div className="turn-glow" />}
+            {/* Turn glow + edge glow */}
+            {(isHumanTurn || isHumanBidding) && (
+              <>
+                <div className="turn-glow" />
+                <div className="your-turn-edge" />
+              </>
+            )}
           </div>
         </>
       )}
