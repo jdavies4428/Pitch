@@ -1583,7 +1583,7 @@ export default function Game() {
                             : 'rgba(255,255,255,0.12)',
                         }}>
                           {pt.team === TEAM_A ? 'US'
-                            : pt.team === TEAM_B ? 'THEM'
+                            : pt.team === TEAM_B ? 'THEY'
                             : pt.team === 'none' ? '\u2014'
                             : '?'}
                         </span>
@@ -1613,7 +1613,7 @@ export default function Game() {
       {/* ── HAND OVER ── */}
       {screen === "handOver" && (() => {
         const bidTeamIsUs = biddingTeam === TEAM_A;
-        const bidTeamLabel = bidTeamIsUs ? 'US' : 'THEM';
+        const bidTeamLabel = bidTeamIsUs ? 'WE' : 'THEY';
         const bidTeamColor = bidTeamIsUs ? '#6b8aad' : '#ad6b6b';
         const pointsWon = handResult?.pointsWon || { [TEAM_A]: 0, [TEAM_B]: 0 };
         const bidderPts = pointsWon[biddingTeam] || 0;
@@ -1770,7 +1770,7 @@ export default function Game() {
                       fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 700,
                       color: wonByUs ? '#6b8aad' : wonByThem ? '#ad6b6b' : 'rgba(255,255,255,0.08)',
                     }}>
-                      {wonByUs ? 'US' : wonByThem ? 'THEM' : '--'}
+                      {wonByUs ? 'US' : wonByThem ? 'THEY' : '--'}
                     </span>
                   </div>
                 );
@@ -1804,7 +1804,7 @@ export default function Game() {
               </div>
               <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: 'rgba(255,255,255,0.1)' }}>:</div>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#ad6b6b', letterSpacing: 2, fontWeight: 500 }}>THEM</div>
+                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#ad6b6b', letterSpacing: 2, fontWeight: 500 }}>THEY</div>
                 <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#ad6b6b' }}>{scores[TEAM_B]}</div>
               </div>
             </div>
