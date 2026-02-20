@@ -1625,6 +1625,27 @@ export default function Game() {
           { key: 'game', label: 'GAME', icon: '\u2605' },
         ];
 
+        // Quips based on who bid and outcome
+        const quips = (() => {
+          const pick = (arr) => arr[handNumber % arr.length];
+          if (bidTeamIsUs && !wasSet) {
+            if (bidderPts === 4) return pick(["Clean sweep!", "All four! Dominant.", "Took everything. Wow."]);
+            if (bidAmount === 4) return pick(["Gutsy bid. Paid off.", "Bid 4 and delivered.", "That takes nerve."]);
+            return pick(["Nice call.", "That's how it's done.", "Right on the money.", "Smooth.", "Called your shot."]);
+          }
+          if (bidTeamIsUs && wasSet) {
+            if (bidAmount === 4) return pick(["Swing and a miss.", "Ambitious. Too ambitious.", "That 4-bid was bold..."]);
+            return pick(["Ouch.", "That one stings.", "Bit of a reach.", "Tough break.", "The table giveth..."]);
+          }
+          if (!bidTeamIsUs && !wasSet) {
+            if (bidderPts === 4) return pick(["They ran the table.", "Nothing you could do.", "Tip of the cap."]);
+            return pick(["Can't win 'em all.", "Their hand.", "Next time.", "They had the cards."]);
+          }
+          // opponent got set
+          if (bidAmount === 4) return pick(["Love to see it.", "That 4-bid backfired.", "Way too greedy."]);
+          return pick(["Ha. Sucks for them.", "Overplayed their hand.", "Love to see it.", "Don't reach.", "Get wrecked."]);
+        })();
+
         return (
           <div className="flex flex-col items-center px-4"
             style={{ gap: 'clamp(14px, 3.5vw, 22px)', maxWidth: 'min(340px, calc(100vw - 24px))' }}>
@@ -1640,6 +1661,14 @@ export default function Game() {
                 letterSpacing: 2,
               }}>
                 {wasSet ? 'SET BACK!' : 'MADE IT!'}
+              </div>
+              <div style={{
+                fontSize: 'clamp(11px, 3vw, 14px)', fontWeight: 400,
+                color: 'rgba(255,255,255,0.35)',
+                marginTop: 4, fontStyle: 'italic',
+                animation: 'fadeIn 0.5s ease-out',
+              }}>
+                {quips}
               </div>
             </div>
 
