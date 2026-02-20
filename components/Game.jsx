@@ -1402,7 +1402,7 @@ export default function Game() {
             {/* ── SOUTH AREA (always the local player) ── */}
             <div style={{
               position: 'absolute',
-              bottom: trumpSuit && livePoints ? 'clamp(44px, 10vw, 56px)' : 0,
+              bottom: trumpSuit && livePoints ? 'clamp(60px, 14vw, 78px)' : 0,
               left: 0, right: 0,
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               zIndex: 10,
