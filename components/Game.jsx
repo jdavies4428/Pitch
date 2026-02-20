@@ -17,6 +17,7 @@ import ScoreBoard from "./ScoreBoard";
 import Confetti from "./Confetti";
 
 const AI_DELAY = 700;
+const AI_BID_DELAY = 1400;
 const TRICK_PAUSE = 1400;
 const POLL_MS = 700;
 
@@ -469,7 +470,7 @@ export default function Game() {
           setStatusMsg(`${SEAT_NAMES[next]} is bidding...`);
         }
       }
-    }, AI_DELAY);
+    }, AI_BID_DELAY);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [mode, phase, currentBidder, bids, highBid, dealer, difficulty, hands]);
@@ -803,13 +804,6 @@ export default function Game() {
             padding: '1px 5px',
             borderRadius: 4,
           }}>LEADS</span>
-        )}
-        {bubble && (
-          <span style={{
-            fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600,
-            color: bubble === 'PASS' ? 'rgba(255,255,255,0.2)' : '#c8aa50',
-            letterSpacing: 0.5,
-          }}>{bubble}</span>
         )}
       </div>
     );
@@ -1304,6 +1298,56 @@ export default function Game() {
                 ? (cutWinner !== null ? displaySeat(cutWinner) : null)
                 : (trickWinner !== null ? displaySeat(trickWinner) : null)}
             />
+
+            {/* ── FLOATING BID BUBBLES ── */}
+            {phase === 'bidding' && (() => {
+              const bubblePositions = {
+                [SOUTH]: { bottom: 'clamp(170px, 42vw, 230px)', left: '50%' },
+                [NORTH]: { top: 'clamp(110px, 26vw, 150px)', left: '50%' },
+                [WEST]:  { top: '42%', left: 'clamp(90px, 22vw, 140px)' },
+                [EAST]:  { top: '42%', right: 'clamp(90px, 22vw, 140px)', left: 'auto' },
+              };
+              return DISPLAY_POSITIONS.map(dp => {
+                const { svrSeat } = getSeatInfo(dp);
+                const bubble = bidBubbles[svrSeat];
+                if (!bubble) return null;
+                const pos = bubblePositions[dp];
+                const isBid = bubble !== 'PASS';
+                return (
+                  <div key={`bid-bubble-${dp}`} style={{
+                    position: 'absolute',
+                    ...pos,
+                    ...(pos.left === '50%' ? { transform: 'translate(-50%, -50%)' } : {}),
+                    zIndex: 25,
+                    animation: 'bidPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+                    pointerEvents: 'none',
+                  }}>
+                    <div style={{
+                      padding: 'clamp(8px, 2vw, 12px) clamp(16px, 4vw, 24px)',
+                      borderRadius: 14,
+                      background: isBid ? 'rgba(200,170,80,0.15)' : 'rgba(0,0,0,0.3)',
+                      border: isBid ? '1.5px solid rgba(200,170,80,0.4)' : '1px solid rgba(255,255,255,0.08)',
+                      backdropFilter: 'blur(12px)',
+                      WebkitBackdropFilter: 'blur(12px)',
+                      boxShadow: isBid
+                        ? '0 4px 20px rgba(200,170,80,0.2), 0 0 40px rgba(200,170,80,0.08)'
+                        : '0 4px 12px rgba(0,0,0,0.3)',
+                    }}>
+                      <div style={{
+                        fontSize: isBid ? 'clamp(16px, 4.5vw, 22px)' : 'clamp(13px, 3.5vw, 16px)',
+                        fontWeight: 700,
+                        color: isBid ? '#c8aa50' : 'rgba(255,255,255,0.3)',
+                        letterSpacing: isBid ? 3 : 2,
+                        textAlign: 'center',
+                        textShadow: isBid ? '0 0 12px rgba(200,170,80,0.4)' : 'none',
+                      }}>
+                        {bubble}
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
 
             {/* Cut for deal label */}
             {phase === 'cutForDeal' && (
