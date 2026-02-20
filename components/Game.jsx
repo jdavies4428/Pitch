@@ -1399,69 +1399,16 @@ export default function Game() {
               </div>
             )}
 
-            {/* ── LIVE POINT TRACKER ── */}
-            {trumpSuit && livePoints && (
-              <div style={{
-                position: 'absolute',
-                right: 'clamp(8px, 2vw, 20px)',
-                bottom: 'clamp(110px, 28vw, 155px)',
-                zIndex: 15,
-                display: 'flex', flexDirection: 'column', gap: 'clamp(3px, 0.8vw, 5px)',
-                padding: 'clamp(8px, 2vw, 12px) clamp(10px, 2.5vw, 14px)',
-                borderRadius: 10,
-                background: 'rgba(0,0,0,0.3)',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                fontSize: 'clamp(11px, 3vw, 13px)',
-                fontWeight: 500,
-                lineHeight: 1.4,
-              }}>
-                {[
-                  { label: 'HIGH', team: livePoints.high, card: livePoints.highCard },
-                  { label: 'LOW', team: livePoints.low, card: livePoints.lowCard },
-                ].map(row => (
-                  <div key={row.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>{row.label}</span>
-                    {row.team !== null ? (
-                      <span style={{ color: row.team === TEAM_A ? '#6b8aad' : '#ad6b6b', fontWeight: 700 }}>
-                        {row.team === TEAM_A ? 'US' : 'THEM'}
-                      </span>
-                    ) : (
-                      <span style={{ color: 'rgba(255,255,255,0.12)' }}>?</span>
-                    )}
-                    {row.card && (
-                      <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 'clamp(9px, 2.5vw, 11px)' }}>{cardDisplay(row.card)}</span>
-                    )}
-                  </div>
-                ))}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>JACK</span>
-                  {livePoints.jackExists
-                    ? (livePoints.jack !== null
-                      ? <span style={{ color: livePoints.jack === TEAM_A ? '#6b8aad' : '#ad6b6b', fontWeight: 700 }}>
-                          {livePoints.jack === TEAM_A ? 'US' : 'THEM'}
-                        </span>
-                      : <span style={{ color: 'rgba(255,255,255,0.12)' }}>?</span>)
-                    : <span style={{ color: 'rgba(255,255,255,0.08)' }}>&mdash;</span>
-                  }
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600, letterSpacing: 1, width: 32 }}>GAME</span>
-                  <span style={{ color: '#6b8aad', fontWeight: 700 }}>{livePoints.gameA}</span>
-                  <span style={{ color: 'rgba(255,255,255,0.08)' }}>-</span>
-                  <span style={{ color: '#ad6b6b', fontWeight: 700 }}>{livePoints.gameB}</span>
-                </div>
-              </div>
-            )}
 
             {/* ── SOUTH AREA (always the local player) ── */}
             <div style={{
               position: 'absolute',
-              bottom: 0, left: 0, right: 0,
+              bottom: trumpSuit && livePoints ? 'clamp(44px, 10vw, 56px)' : 0,
+              left: 0, right: 0,
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               zIndex: 10,
-              paddingBottom: 'max(6px, env(safe-area-inset-bottom, 0px))',
+              paddingBottom: (!trumpSuit || !livePoints) ? 'max(6px, env(safe-area-inset-bottom, 0px))' : 0,
+              transition: 'bottom 0.3s ease',
             }}>
               {/* Follow-suit / turn status badge */}
               {isHumanTurn && phase === 'trickPlay' && (
@@ -1583,6 +1530,75 @@ export default function Game() {
                 </div>
               )}
             </div>
+
+            {/* ── HORIZONTAL POINT TRACKER BAR ── */}
+            {trumpSuit && livePoints && (
+              <div style={{
+                position: 'absolute',
+                bottom: 0, left: 0, right: 0,
+                zIndex: 15,
+                paddingBottom: 'max(4px, env(safe-area-inset-bottom, 0px))',
+                background: 'linear-gradient(to top, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.35) 70%, transparent 100%)',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  gap: 'clamp(4px, 2vw, 12px)',
+                  padding: 'clamp(6px, 1.5vw, 10px) clamp(12px, 3vw, 20px)',
+                  margin: '0 auto',
+                  maxWidth: 480,
+                }}>
+                  {[
+                    { label: 'HIGH', team: livePoints.high, card: livePoints.highCard },
+                    { label: 'LOW', team: livePoints.low, card: livePoints.lowCard },
+                    { label: 'JACK', team: livePoints.jackExists ? livePoints.jack : 'none' },
+                    { label: 'GAME', gameA: livePoints.gameA, gameB: livePoints.gameB },
+                  ].map((pt, i) => (
+                    <div key={pt.label} style={{
+                      flex: 1,
+                      display: 'flex', flexDirection: 'column', alignItems: 'center',
+                      gap: 2,
+                      padding: 'clamp(4px, 1vw, 8px) 0',
+                      borderRadius: 8,
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                    }}>
+                      <span style={{
+                        fontSize: 'clamp(7px, 2vw, 9px)',
+                        color: 'rgba(255,255,255,0.3)',
+                        fontWeight: 600, letterSpacing: 1.5,
+                      }}>{pt.label}</span>
+                      {pt.label === 'GAME' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <span style={{ fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700, color: '#6b8aad' }}>{pt.gameA}</span>
+                          <span style={{ fontSize: 'clamp(8px, 2vw, 10px)', color: 'rgba(255,255,255,0.1)' }}>-</span>
+                          <span style={{ fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700, color: '#ad6b6b' }}>{pt.gameB}</span>
+                        </div>
+                      ) : (
+                        <span style={{
+                          fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700,
+                          color: pt.team === TEAM_A ? '#6b8aad'
+                            : pt.team === TEAM_B ? '#ad6b6b'
+                            : pt.team === 'none' ? 'rgba(255,255,255,0.08)'
+                            : 'rgba(255,255,255,0.12)',
+                        }}>
+                          {pt.team === TEAM_A ? 'US'
+                            : pt.team === TEAM_B ? 'THEM'
+                            : pt.team === 'none' ? '\u2014'
+                            : '?'}
+                        </span>
+                      )}
+                      {pt.card && (
+                        <span style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: 'rgba(255,255,255,0.15)' }}>
+                          {cardDisplay(pt.card)}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Turn glow + edge glow */}
             {(isHumanTurn || isHumanBidding) && (
