@@ -1217,7 +1217,7 @@ export default function Game() {
               return (
                 <div style={{
                   position: 'absolute',
-                  top: 'clamp(38px, 9vw, 52px)',
+                  top: 'clamp(52px, 12vw, 68px)',
                   left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column', alignItems: 'center',
                   gap: 4, zIndex: 10,
