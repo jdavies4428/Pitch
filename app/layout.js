@@ -1,13 +1,18 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Pitch — Card Game",
-  description: "Play the classic trick-taking card game Pitch (High-Low-Jack) against AI opponents. Retro arcade style, no downloads.",
+  title: "Pitch — Four Player Card Game",
+  description: "Play Pitch (High-Low-Jack) online with friends or against AI. Bid, pitch trump, take tricks. First team to 11 wins!",
   openGraph: {
-    title: "Pitch — High Low Jack Game",
-    description: "Bid, pitch trump, take tricks. First team to 11 wins.",
+    title: "Pitch — Play Online With Friends",
+    description: "The classic trick-taking card game. Bid, pitch trump, take tricks. Play solo or challenge a friend — each player gets an AI partner!",
     type: "website",
     siteName: "Pitch",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Pitch — Play Online With Friends",
+    description: "The classic trick-taking card game. Bid, pitch trump, take tricks. First team to 11 wins!",
   },
   appleWebApp: {
     capable: true,
