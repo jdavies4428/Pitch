@@ -727,7 +727,7 @@ export default function Game() {
   // ── Derived UI state ──
   const isHumanTurn = (phase === 'trickPlay' || phase === 'pitching') && currentPlayer === myActualSeat;
   const isHumanBidding = phase === 'bidding' && currentBidder === myActualSeat;
-  const mustFollow = isHumanTurn && ledSuit && ledSuit === trumpSuit &&
+  const mustFollow = isHumanTurn && ledSuit &&
     playableCards.length < hands[myActualSeat]?.length;
   const livePoints = mode === 'solo' ? getLivePoints(originalHands, capturedTricks, trumpSuit) : null;
 
@@ -1452,8 +1452,8 @@ export default function Game() {
                     animation: 'slideUp 0.3s ease-out, glowPulse 2s ease-in-out infinite',
                     backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
                   }}>
-                    <span style={{ fontSize: 'clamp(14px, 3.5vw, 16px)' }}>{SUIT_SYMBOLS[trumpSuit]}</span>
-                    <span>MUST FOLLOW TRUMP</span>
+                    <span style={{ fontSize: 'clamp(14px, 3.5vw, 16px)' }}>{SUIT_SYMBOLS[ledSuit]}</span>
+                    <span>{ledSuit === trumpSuit ? 'MUST FOLLOW TRUMP' : 'FOLLOW SUIT OR TRUMP'}</span>
                   </div>
                 ) : (
                   <div style={{
