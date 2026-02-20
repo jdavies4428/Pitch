@@ -1791,21 +1791,27 @@ export default function Game() {
               </div>
             )}
 
-            {/* Score */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              padding: '8px 24px', borderRadius: 12,
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.05)',
-            }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#6b8aad', letterSpacing: 2, fontWeight: 500 }}>US</div>
-                <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#6b8aad' }}>{scores[TEAM_A]}</div>
-              </div>
-              <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: 'rgba(255,255,255,0.1)' }}>:</div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#ad6b6b', letterSpacing: 2, fontWeight: 500 }}>THEM</div>
-                <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#ad6b6b' }}>{scores[TEAM_B]}</div>
+            {/* Game Score */}
+            <div style={{ textAlign: 'center' }}>
+              <div style={{
+                fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600,
+                color: 'rgba(255,255,255,0.25)', letterSpacing: 2, marginBottom: 4,
+              }}>GAME SCORE</div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 16,
+                padding: '8px 24px', borderRadius: 12,
+                background: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.05)',
+              }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#6b8aad', letterSpacing: 2, fontWeight: 500 }}>US</div>
+                  <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#6b8aad' }}>{scores[TEAM_A]}</div>
+                </div>
+                <div style={{ fontSize: 'clamp(10px, 2.5vw, 12px)', color: 'rgba(255,255,255,0.1)' }}>:</div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: '#ad6b6b', letterSpacing: 2, fontWeight: 500 }}>THEM</div>
+                  <div style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: '#ad6b6b' }}>{scores[TEAM_B]}</div>
+                </div>
               </div>
             </div>
 
