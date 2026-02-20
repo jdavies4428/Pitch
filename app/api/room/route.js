@@ -154,7 +154,7 @@ function applyBid(room, seat, bidAmount) {
   room.bids.push({ seat, bid: bidAmount });
   room.bidBubbles[seat] = bidAmount === 0 ? 'PASS' : `BID ${bidAmount}`;
 
-  if (bidAmount > (room.highBid?.amount || 0)) {
+  if (bidAmount > 0 && bidAmount >= (room.highBid?.amount || 0)) {
     room.highBid = { seat, amount: bidAmount };
   }
 
