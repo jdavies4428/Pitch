@@ -784,13 +784,13 @@ export default function Game() {
         }}>{name}</span>
         {isD && (
           <span style={{
-            fontSize: 'clamp(8px, 2vw, 9px)', fontWeight: 800,
+            fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 800,
             color: '#1a1a1a',
             background: 'linear-gradient(135deg, #e8c840, #c8aa50)',
-            width: 'clamp(16px, 4vw, 20px)', height: 'clamp(16px, 4vw, 20px)',
+            width: 'clamp(22px, 6vw, 28px)', height: 'clamp(22px, 6vw, 28px)',
             borderRadius: '50%',
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.3)',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.3), 0 0 10px rgba(200,170,80,0.2)',
             letterSpacing: 0, lineHeight: 1, flexShrink: 0,
           }}>D</span>
         )}
@@ -1236,7 +1236,7 @@ export default function Game() {
               return (
                 <div style={{
                   position: 'absolute',
-                  top: trumpSuit ? 'clamp(76px, 18vw, 100px)' : 'clamp(38px, 9vw, 52px)',
+                  top: 'clamp(38px, 9vw, 52px)',
                   left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column', alignItems: 'center',
                   gap: 4, zIndex: 10,
@@ -1287,19 +1287,30 @@ export default function Game() {
               );
             })()}
 
-            {/* ── TRUMP INDICATOR ── */}
+            {/* ── TRUMP INDICATOR — left side badge ── */}
             {trumpSuit && (
               <div style={{
                 position: 'absolute',
-                top: 'clamp(40px, 10vw, 56px)',
-                left: '50%', transform: 'translateX(-50%)',
-                display: 'flex', alignItems: 'center', gap: 8,
+                left: 'clamp(10px, 2.5vw, 24px)',
+                top: 'clamp(42px, 10vw, 60px)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
                 zIndex: 20,
+                padding: 'clamp(6px, 1.5vw, 10px) clamp(8px, 2vw, 14px)',
+                borderRadius: 12,
+                background: 'rgba(200,170,80,0.08)',
+                border: '1px solid rgba(200,170,80,0.2)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
               }}>
                 <span style={{
-                  fontSize: 'clamp(28px, 8vw, 42px)',
+                  fontSize: 'clamp(8px, 2vw, 9px)',
+                  color: 'rgba(200,170,80,0.5)',
+                  letterSpacing: 2, fontWeight: 600,
+                }}>TRUMP</span>
+                <span style={{
+                  fontSize: 'clamp(32px, 9vw, 48px)',
                   color: '#c8aa50',
-                  filter: 'drop-shadow(0 2px 8px rgba(200,170,80,0.3))',
+                  filter: 'drop-shadow(0 2px 8px rgba(200,170,80,0.4))',
                   lineHeight: 1,
                 }}>{SUIT_SYMBOLS[trumpSuit]}</span>
               </div>
@@ -1341,16 +1352,16 @@ export default function Game() {
                 </div>
                 {cutWinner && (
                   <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
+                    display: 'flex', alignItems: 'center', gap: 8,
                   }}>
                     <span style={{
-                      fontSize: 'clamp(8px, 2vw, 9px)', fontWeight: 800,
+                      fontSize: 'clamp(12px, 3.5vw, 14px)', fontWeight: 800,
                       color: '#1a1a1a',
                       background: 'linear-gradient(135deg, #e8c840, #c8aa50)',
-                      width: 'clamp(20px, 5vw, 26px)', height: 'clamp(20px, 5vw, 26px)',
+                      width: 'clamp(28px, 7vw, 34px)', height: 'clamp(28px, 7vw, 34px)',
                       borderRadius: '50%',
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: '0 1px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.3)',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.3), 0 0 12px rgba(200,170,80,0.25)',
                       lineHeight: 1,
                     }}>D</span>
                     <span style={{
