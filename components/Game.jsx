@@ -1212,6 +1212,32 @@ export default function Game() {
             width: '100%', height: '100%',
             maxWidth: 960, margin: '0 auto',
           }}>
+            {/* Home / menu button */}
+            {!waiting && (
+              <button
+                onClick={() => { if (confirm('Leave game and return to lobby?')) goToLobby(); }}
+                style={{
+                  position: 'absolute',
+                  top: 'max(10px, env(safe-area-inset-top, 0px))',
+                  left: 8,
+                  zIndex: 25,
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 10,
+                  padding: 'clamp(6px, 1.5vw, 8px)',
+                  color: 'rgba(255,255,255,0.4)',
+                  fontSize: 'clamp(14px, 3.5vw, 16px)',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+              >
+                ✕
+              </button>
+            )}
+
             <ScoreBoard
               scores={scores}
               bidInfo={bidAmount > 0 ? { amount: bidAmount, team: biddingTeam } : null}
