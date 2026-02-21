@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   SOUTH, WEST, NORTH, EAST, TEAM_A, TEAM_B,
   getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, SEAT_NAMES, isRedSuit,
@@ -11,15 +11,18 @@ import {
 import { getAiBid, getAiPlay, getAiTrumpCard } from "@/lib/ai";
 import { roomApi } from "@/lib/api-client";
 import { sounds } from "@/lib/sounds";
+import {
+  PHASE_IDLE, PHASE_CUT, PHASE_DEALING, PHASE_BIDDING, PHASE_PITCHING,
+  PHASE_TRICK_PLAY, PHASE_TRICK_COLLECT, PHASE_HAND_OVER, PHASE_GAME_OVER,
+  AI_DELAY, AI_BID_DELAY, TRICK_PAUSE, POLL_MS, CONFETTI_DURATION,
+  COLORS, Z,
+} from "@/lib/constants";
 import Hand from "./Hand";
 import TrickArea from "./TrickArea";
 import ScoreBoard from "./ScoreBoard";
 import Confetti from "./Confetti";
-
-const AI_DELAY = 700;
-const AI_BID_DELAY = 1400;
-const TRICK_PAUSE = 1400;
-const POLL_MS = 700;
+import SeatLabel from "./SeatLabel";
+import BidBubbles from "./BidBubbles";
 
 const DIFF_LABELS = { easy: "ROOKIE", medium: "STANDARD", hard: "SHARK" };
 const DIFF_COLORS = { easy: "#7a9b8a", medium: "#6b8aad", hard: "#ad6b6b" };
@@ -37,8 +40,6 @@ const PLAYER_INFO = {
   [EAST]:  { name: 'BLITZ', initial: 'B', color: '#ad6b6b' },
 };
 
-// Display positions
-const DISPLAY_POSITIONS = [SOUTH, WEST, NORTH, EAST];
 
 export default function Game() {
   // ── Mode ──
@@ -74,7 +75,7 @@ export default function Game() {
   const [handNumber, setHandNumber] = useState(1);
 
   // ── Bidding ──
-  const [phase, setPhase] = useState("idle");
+  const [phase, setPhase] = useState(PHASE_IDLE);
   const [currentBidder, setCurrentBidder] = useState(null);
   const [bids, setBids] = useState([]);
   const [highBid, setHighBid] = useState({ seat: null, amount: 0 });
@@ -132,6 +133,11 @@ export default function Game() {
     if (!audioReady) setAudioReady(true);
   }, [audioReady]);
 
+  // ── Shared hand update helper ──
+  const removeCardFromHand = useCallback((seat, card) => {
+    setHands(prev => prev.map((h, i) => i === seat ? h.filter(c => !cardEquals(c, card)) : h));
+  }, []);
+
   // ── Cleanup ──
   useEffect(() => {
     return () => {
@@ -159,25 +165,25 @@ export default function Game() {
     }
 
     // Map server phase to screen
-    if (state.phase === 'gameOver') {
+    if (state.phase === PHASE_GAME_OVER) {
       setScreen('gameOver');
-    } else if (state.phase === 'handOver') {
+    } else if (state.phase === PHASE_HAND_OVER) {
       setScreen('handOver');
-    } else if (state.phase !== 'waiting') {
+    } else if (state.phase !== PHASE_WAITING) {
       setScreen('playing');
     }
 
     // Sound triggers on state changes
     if (prev) {
-      if (state.phase === 'bidding' && prev.phase !== 'bidding') sounds.shuffle();
+      if (state.phase === PHASE_BIDDING && prev.phase !== PHASE_BIDDING) sounds.shuffle();
       if (state.trickPlays?.length > prev.trickPlays?.length) sounds.cardPlay();
       if (state.trickWinner !== null && prev.trickWinner === null) sounds.trickWon();
-      if (state.phase === 'trickPlay' && state.currentPlayer === state.mySeat &&
-          (prev.currentPlayer !== state.mySeat || prev.phase !== 'trickPlay')) sounds.turn();
-      if (state.phase === 'bidding' && state.currentBidder === state.mySeat &&
-          (prev.currentBidder !== state.mySeat || prev.phase !== 'bidding')) sounds.turn();
-      if (state.phase === 'pitching' && state.currentPlayer === state.mySeat &&
-          prev.phase !== 'pitching') sounds.turn();
+      if (state.phase === PHASE_TRICK_PLAY && state.currentPlayer === state.mySeat &&
+          (prev.currentPlayer !== state.mySeat || prev.phase !== PHASE_TRICK_PLAY)) sounds.turn();
+      if (state.phase === PHASE_BIDDING && state.currentBidder === state.mySeat &&
+          (prev.currentBidder !== state.mySeat || prev.phase !== PHASE_BIDDING)) sounds.turn();
+      if (state.phase === PHASE_PITCHING && state.currentPlayer === state.mySeat &&
+          prev.phase !== PHASE_PITCHING) sounds.turn();
       // Bid sounds
       if (state.bids?.length > (prev.bids?.length || 0)) {
         const lastBid = state.bids[state.bids.length - 1];
@@ -227,14 +233,14 @@ export default function Game() {
       if (getTeam(state.mySeat) === state.gameWinner) {
         sounds.win();
         setShowConfetti(true);
-        setTimeout(() => setShowConfetti(false), 4000);
+        setTimeout(() => setShowConfetti(false), CONFETTI_DURATION);
       } else {
         sounds.lose();
       }
     }
 
     // Handle set back sound
-    if (state.phase === 'handOver' && prev?.phase !== 'handOver') {
+    if (state.phase === PHASE_HAND_OVER && prev?.phase !== PHASE_HAND_OVER) {
       if (state.wasSet) sounds.setBack();
       else sounds.madeIt();
     }
@@ -314,7 +320,7 @@ export default function Game() {
     setMode(null);
     setRoomCode(null);
     setScreen("lobby");
-    setPhase("idle");
+    setPhase(PHASE_IDLE);
     setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
     setHandNumber(1);
     setDealer(EAST);
@@ -338,12 +344,12 @@ export default function Game() {
     setGameWinner(null);
     setHands([[], [], [], []]);
     setScreen("playing");
-    setPhase("cutForDeal");
+    setPhase(PHASE_CUT);
   }, []);
 
   // ── CUT FOR DEAL (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || phase !== "cutForDeal") return;
+    if (mode !== 'solo' || phase !== PHASE_CUT) return;
 
     const deck = shuffleDeck(createDeck());
     const order = [SOUTH, WEST, NORTH, EAST];
@@ -380,7 +386,7 @@ export default function Game() {
       setDealer(winner.player);
       setCutCards([]);
       setCutWinner(null);
-      setPhase("dealing");
+      setPhase(PHASE_DEALING);
     }, 600 + 4 * 450 + 400 + 2000));
 
     return () => timeouts.forEach(t => clearTimeout(t));
@@ -388,7 +394,7 @@ export default function Game() {
 
   // ── DEALING (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || screen !== "playing" || phase !== "dealing") return;
+    if (mode !== 'solo' || screen !== "playing" || phase !== PHASE_DEALING) return;
 
     const dealt = dealHands(dealer);
     setOriginalHands(dealt.map(h => [...h]));
@@ -410,7 +416,7 @@ export default function Game() {
     timerRef.current = setTimeout(() => {
       const first = (dealer + 1) % 4;
       setCurrentBidder(first);
-      setPhase("bidding");
+      setPhase(PHASE_BIDDING);
       if (first === SOUTH) {
         setStatusMsg("Your bid");
         sounds.turn();
@@ -424,7 +430,7 @@ export default function Game() {
 
   // ── BIDDING AI (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || phase !== "bidding" || currentBidder === null || currentBidder === SOUTH) return;
+    if (mode !== 'solo' || phase !== PHASE_BIDDING || currentBidder === null || currentBidder === SOUTH) return;
     if (bids.length >= 4) return;
 
     timerRef.current = setTimeout(() => {
@@ -454,7 +460,7 @@ export default function Game() {
         setBiddingTeam(getTeam(winBid.seat));
         setBidAmount(winBid.amount);
         setCurrentPlayer(winBid.seat);
-        setPhase("pitching");
+        setPhase(PHASE_PITCHING);
         if (winBid.seat === SOUTH) {
           setStatusMsg("Pick your trump \u2014 play a card!");
           sounds.turn();
@@ -476,21 +482,17 @@ export default function Game() {
 
   // ── AI PITCHING (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || phase !== "pitching" || currentPlayer === null || currentPlayer === SOUTH) return;
+    if (mode !== 'solo' || phase !== PHASE_PITCHING || currentPlayer === null || currentPlayer === SOUTH) return;
 
     timerRef.current = setTimeout(() => {
       const preferred = getAiBid(hands[currentPlayer], 0, false, false, difficulty).preferredSuit;
       const trumpCard = getAiTrumpCard(hands[currentPlayer], preferred);
       setTrumpSuit(trumpCard.suit);
       setTrickPlays([{ player: currentPlayer, card: trumpCard }]);
-      setHands(prev => {
-        const next = prev.map(h => [...h]);
-        next[currentPlayer] = next[currentPlayer].filter(c => !cardEquals(c, trumpCard));
-        return next;
-      });
+      removeCardFromHand(currentPlayer, trumpCard);
       const np = (currentPlayer + 1) % 4;
       setCurrentPlayer(np);
-      setPhase("trickPlay");
+      setPhase(PHASE_TRICK_PLAY);
       sounds.cardPlay();
       if (np === SOUTH) {
         setStatusMsg("Your turn");
@@ -505,7 +507,7 @@ export default function Game() {
 
   // ── TRICK PLAY AI (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || phase !== "trickPlay" || currentPlayer === null || currentPlayer === SOUTH) return;
+    if (mode !== 'solo' || phase !== PHASE_TRICK_PLAY || currentPlayer === null || currentPlayer === SOUTH) return;
     if (trickPlays.length >= 4) return;
 
     timerRef.current = setTimeout(() => {
@@ -517,14 +519,10 @@ export default function Game() {
 
       const newPlays = [...trickPlays, { player: currentPlayer, card }];
       setTrickPlays(newPlays);
-      setHands(prev => {
-        const next = prev.map(h => [...h]);
-        next[currentPlayer] = next[currentPlayer].filter(c => !cardEquals(c, card));
-        return next;
-      });
+      removeCardFromHand(currentPlayer, card);
 
       if (newPlays.length >= 4) {
-        setPhase("trickCollect");
+        setPhase(PHASE_TRICK_COLLECT);
       } else {
         const np = (currentPlayer + 1) % 4;
         setCurrentPlayer(np);
@@ -542,7 +540,7 @@ export default function Game() {
 
   // ── TRICK COLLECT (solo) ──
   useEffect(() => {
-    if (mode !== 'solo' || phase !== "trickCollect") return;
+    if (mode !== 'solo' || phase !== PHASE_TRICK_COLLECT) return;
     if (trickPlays.length < 4) return;
 
     const winner = evaluateTrick(trickPlays, trumpSuit);
@@ -575,7 +573,7 @@ export default function Game() {
           if (gw === TEAM_A) {
             sounds.win();
             setShowConfetti(true);
-            setTimeout(() => setShowConfetti(false), 4000);
+            setTimeout(() => setShowConfetti(false), CONFETTI_DURATION);
           } else {
             sounds.lose();
           }
@@ -586,7 +584,7 @@ export default function Game() {
       } else {
         setTrickNumber(prev => prev + 1);
         setCurrentPlayer(winner);
-        setPhase("trickPlay");
+        setPhase(PHASE_TRICK_PLAY);
         if (winner === SOUTH) {
           setStatusMsg("Your lead");
           sounds.turn();
@@ -629,7 +627,7 @@ export default function Game() {
       setBiddingTeam(getTeam(winBid.seat));
       setBidAmount(winBid.amount);
       setCurrentPlayer(winBid.seat);
-      setPhase("pitching");
+      setPhase(PHASE_PITCHING);
       if (winBid.seat === SOUTH) {
         setStatusMsg("Pick your trump \u2014 play a card!");
       }
@@ -651,21 +649,17 @@ export default function Game() {
     }
 
     // Solo mode
-    if (phase === "pitching") {
+    if (phase === PHASE_PITCHING) {
       setTrumpSuit(card.suit);
-      setPhase("trickPlay");
+      setPhase(PHASE_TRICK_PLAY);
     }
 
     const newPlays = [...trickPlays, { player: SOUTH, card }];
     setTrickPlays(newPlays);
-    setHands(prev => {
-      const next = prev.map(h => [...h]);
-      next[SOUTH] = next[SOUTH].filter(c => !cardEquals(c, card));
-      return next;
-    });
+    removeCardFromHand(SOUTH, card);
 
     if (newPlays.length >= 4) {
-      setPhase("trickCollect");
+      setPhase(PHASE_TRICK_COLLECT);
     } else {
       const np = (SOUTH + 1) % 4;
       setCurrentPlayer(np);
@@ -678,7 +672,7 @@ export default function Game() {
     if (mode === 'online') return; // handled by server
     setDealer(prev => nextDealer(prev));
     setHandNumber(prev => prev + 1);
-    setPhase("dealing");
+    setPhase(PHASE_DEALING);
     setScreen("playing");
   }, [mode]);
 
@@ -693,41 +687,49 @@ export default function Game() {
     setGameWinner(null);
     setShowConfetti(false);
     setHands([[], [], [], []]);
-    setPhase("cutForDeal");
+    setPhase(PHASE_CUT);
     setScreen("playing");
   }, [mode, roomCode, playerId]);
 
-  // ── Derived state ──
+  // ── Derived state (memoized) ──
   const isOnline = mode === 'online';
   const myActualSeat = isOnline ? mySeat : SOUTH;
 
-  const ledSuit = trickPlays.length > 0 ? trickPlays[0].card.suit : null;
+  const ledSuit = useMemo(
+    () => trickPlays.length > 0 ? trickPlays[0].card.suit : null,
+    [trickPlays]
+  );
 
   // In online mode, server provides playable cards; in solo, compute locally
-  const playableCards = isOnline
-    ? (lastStateRef.current?.playableCards || [])
-    : (phase === "trickPlay" && currentPlayer === SOUTH)
-      ? getPlayableCards(hands[SOUTH], trumpSuit, ledSuit)
-      : (phase === "pitching" && currentPlayer === SOUTH)
-        ? [...hands[SOUTH]]
-        : [];
+  const playableCards = useMemo(() => {
+    if (isOnline) return lastStateRef.current?.playableCards || [];
+    if (phase === PHASE_TRICK_PLAY && currentPlayer === SOUTH)
+      return getPlayableCards(hands[SOUTH], trumpSuit, ledSuit);
+    if (phase === PHASE_PITCHING && currentPlayer === SOUTH)
+      return [...hands[SOUTH]];
+    return [];
+  }, [isOnline, phase, currentPlayer, hands, trumpSuit, ledSuit]);
 
-  const validBids = isOnline
-    ? (lastStateRef.current?.validBids || [])
-    : (phase === "bidding" && currentBidder === SOUTH)
-      ? getValidBids(
-          highBid.amount,
-          dealer === SOUTH,
-          bids.length === 3 && bids.every(b => b.bid === 0)
-        )
-      : [];
+  const validBids = useMemo(() => {
+    if (isOnline) return lastStateRef.current?.validBids || [];
+    if (phase === PHASE_BIDDING && currentBidder === SOUTH)
+      return getValidBids(
+        highBid.amount,
+        dealer === SOUTH,
+        bids.length === 3 && bids.every(b => b.bid === 0)
+      );
+    return [];
+  }, [isOnline, phase, currentBidder, highBid.amount, dealer, bids]);
 
-  // ── Derived UI state ──
-  const isHumanTurn = (phase === 'trickPlay' || phase === 'pitching') && currentPlayer === myActualSeat;
-  const isHumanBidding = phase === 'bidding' && currentBidder === myActualSeat;
+  // ── Derived UI state (memoized) ──
+  const isHumanTurn = (phase === PHASE_TRICK_PLAY || phase === PHASE_PITCHING) && currentPlayer === myActualSeat;
+  const isHumanBidding = phase === PHASE_BIDDING && currentBidder === myActualSeat;
   const mustFollow = isHumanTurn && ledSuit &&
     playableCards.length < hands[myActualSeat]?.length;
-  const livePoints = mode === 'solo' ? getLivePoints(originalHands, capturedTricks, trumpSuit) : null;
+  const livePoints = useMemo(
+    () => mode === 'solo' ? getLivePoints(originalHands, capturedTricks, trumpSuit) : null,
+    [mode, originalHands, capturedTricks, trumpSuit]
+  );
 
   const getDimLevel = (seat) => {
     if (!isHumanTurn) return 'primary';
@@ -735,8 +737,8 @@ export default function Game() {
   };
 
   const isLeading = (seat) => {
-    return (phase === 'trickPlay' && currentPlayer === seat && trickPlays.length === 0) ||
-      (phase === 'pitching' && currentPlayer === seat);
+    return (phase === PHASE_TRICK_PLAY && currentPlayer === seat && trickPlays.length === 0) ||
+      (phase === PHASE_PITCHING && currentPlayer === seat);
   };
 
   // Get display info for a seat, accounting for rotation
@@ -751,72 +753,30 @@ export default function Game() {
   // ── Seat label renderer ──
   const renderSeatLabel = (displayPos) => {
     const { svrSeat, name } = getSeatInfo(displayPos);
-    const isActive = (phase === 'trickPlay' && currentPlayer === svrSeat) ||
-      (phase === 'pitching' && currentPlayer === svrSeat) ||
-      (phase === 'bidding' && currentBidder === svrSeat);
-    const leading = isLeading(svrSeat);
-    const isD = dealer === svrSeat;
-    const bubble = bidBubbles[svrSeat];
-
+    const isActive = (phase === PHASE_TRICK_PLAY && currentPlayer === svrSeat) ||
+      (phase === PHASE_PITCHING && currentPlayer === svrSeat) ||
+      (phase === PHASE_BIDDING && currentBidder === svrSeat);
     return (
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        whiteSpace: 'nowrap',
-        padding: isActive ? '3px 10px' : '3px 6px',
-        borderRadius: 12,
-        background: isActive ? 'rgba(200,170,80,0.12)' : 'transparent',
-        border: isActive ? '1px solid rgba(200,170,80,0.2)' : '1px solid transparent',
-        transition: 'all 0.3s',
-      }}>
-        {isActive && (
-          <div style={{
-            width: 5, height: 5, borderRadius: '50%',
-            background: '#c8aa50',
-            boxShadow: '0 0 6px rgba(200,170,80,0.5)',
-            animation: 'pulse 1.5s ease-in-out infinite',
-          }} />
-        )}
-        <span style={{
-          fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 700,
-          color: isActive ? '#c8aa50' : 'rgba(255,255,255,0.35)',
-          letterSpacing: 1.5, textTransform: 'uppercase',
-          transition: 'color 0.3s',
-        }}>{name}</span>
-        {isD && (
-          <span style={{
-            fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 800,
-            color: '#1a1a1a',
-            background: 'linear-gradient(135deg, #e8c840, #c8aa50)',
-            width: 'clamp(22px, 6vw, 28px)', height: 'clamp(22px, 6vw, 28px)',
-            borderRadius: '50%',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.3), 0 0 10px rgba(200,170,80,0.2)',
-            letterSpacing: 0, lineHeight: 1, flexShrink: 0,
-          }}>D</span>
-        )}
-        {leading && (
-          <span style={{
-            fontSize: 'clamp(8px, 2vw, 9px)', fontWeight: 700,
-            color: '#c8aa50',
-            letterSpacing: 1,
-            background: 'rgba(200,170,80,0.15)',
-            padding: '1px 5px',
-            borderRadius: 4,
-          }}>LEADS</span>
-        )}
-      </div>
+      <SeatLabel
+        name={name}
+        isActive={isActive}
+        isDealer={dealer === svrSeat}
+        isLeading={isLeading(svrSeat)}
+      />
     );
   };
 
 
-  // ── Rotate trick plays for display ──
-  const displayTrickPlays = isOnline
-    ? trickPlays.map(p => ({ ...p, player: displaySeat(p.player) }))
-    : trickPlays;
+  // ── Rotate trick plays for display (memoized) ──
+  const displayTrickPlays = useMemo(
+    () => isOnline ? trickPlays.map(p => ({ ...p, player: displaySeat(p.player) })) : trickPlays,
+    [isOnline, trickPlays, displaySeat]
+  );
 
-  const displayCutCards = isOnline
-    ? cutCards.map(c => ({ ...c, player: displaySeat(c.player) }))
-    : cutCards;
+  const displayCutCards = useMemo(
+    () => isOnline ? cutCards.map(c => ({ ...c, player: displaySeat(c.player) })) : cutCards,
+    [isOnline, cutCards, displaySeat]
+  );
 
   // ═══════════════════════════════════════
   // ── RENDER ──
@@ -827,7 +787,6 @@ export default function Game() {
       style={{ height: '100dvh' }}
       onClick={initAudio}>
 
-      <div className="scanlines" />
       {showConfetti && <Confetti />}
 
       {/* ── LOBBY ── */}
@@ -900,7 +859,7 @@ export default function Game() {
               {/* Enter name */}
               {lobbyAction === 'enterName' && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', letterSpacing: 3, fontWeight: 500 }}>
                     ENTER YOUR NAME
                   </div>
                   <input
@@ -918,8 +877,6 @@ export default function Game() {
                       fontSize: 16, textAlign: 'center',
                       outline: 'none', fontFamily: 'Inter, sans-serif',
                     }}
-                    onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
-                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
                   />
                   <button className="btn w-full"
                     onClick={() => { if (playerName.trim()) setLobbyAction('chooseAction'); }}
@@ -940,7 +897,7 @@ export default function Game() {
               {/* Create or Join */}
               {lobbyAction === 'chooseAction' && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', letterSpacing: 3, fontWeight: 500 }}>
                     PLAYING AS {playerName.toUpperCase()}
                   </div>
 
@@ -1012,7 +969,7 @@ export default function Game() {
               {/* Join room */}
               {lobbyAction === 'joinRoom' && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', letterSpacing: 3, fontWeight: 500 }}>
                     ENTER ROOM CODE
                   </div>
                   <input
@@ -1031,8 +988,6 @@ export default function Game() {
                       outline: 'none', fontFamily: 'Inter, sans-serif',
                       letterSpacing: 12, fontWeight: 700,
                     }}
-                    onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
-                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
                   />
                   <button className="btn w-full" onClick={joinRoom}
                     disabled={joinCode.length !== 4}
@@ -1066,7 +1021,7 @@ export default function Game() {
       {/* ── DIFFICULTY (solo) ── */}
       {screen === "difficulty" && (
         <div className="flex flex-col items-center w-full max-w-[320px] px-4 gap-4">
-          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>SELECT DIFFICULTY</div>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', letterSpacing: 3, fontWeight: 500 }}>SELECT DIFFICULTY</div>
           {Object.entries(DIFF_LABELS).map(([key, label]) => (
             <button key={key} className="btn w-full"
               onClick={() => startGame(key)}
@@ -1176,7 +1131,7 @@ export default function Game() {
               zIndex: 50, gap: 16,
               background: 'rgba(6,14,8,0.95)',
             }}>
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', letterSpacing: 3, fontWeight: 500 }}>
                 ROOM CODE
               </div>
               <div style={{
@@ -1186,7 +1141,7 @@ export default function Game() {
               }}>
                 {roomCode}
               </div>
-              <button className="btn btn-sm" onClick={() => {
+              <button className="btn btn-sm" aria-label="Copy room code" onClick={() => {
                 navigator.clipboard?.writeText(roomCode);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
@@ -1195,7 +1150,7 @@ export default function Game() {
                 {copied ? 'COPIED!' : 'COPY CODE'}
               </button>
               <div style={{
-                fontSize: 12, color: 'rgba(255,255,255,0.25)',
+                fontSize: 12, color: 'rgba(255,255,255,0.55)',
                 animation: 'pulse 2s ease-in-out infinite',
               }}>
                 Waiting for opponent to join...
@@ -1215,22 +1170,22 @@ export default function Game() {
             {/* Home / menu button */}
             {!waiting && (
               <button
+                aria-label="Exit to lobby"
                 onClick={() => { if (confirm('Leave game and return to lobby?')) goToLobby(); }}
+                className="glass-sm"
                 style={{
                   position: 'absolute',
                   top: 'max(10px, env(safe-area-inset-top, 0px))',
                   left: 8,
-                  zIndex: 25,
+                  zIndex: Z.bubbles,
                   background: 'rgba(0,0,0,0.3)',
-                  border: '1px solid rgba(255,255,255,0.08)',
+                  border: `1px solid ${COLORS.glassBorderFaint}`,
                   borderRadius: 10,
                   padding: 'clamp(6px, 1.5vw, 8px)',
                   color: 'rgba(255,255,255,0.4)',
                   fontSize: 'clamp(14px, 3.5vw, 16px)',
                   lineHeight: 1,
                   cursor: 'pointer',
-                  backdropFilter: 'blur(8px)',
-                  WebkitBackdropFilter: 'blur(8px)',
                   WebkitTapHighlightColor: 'transparent',
                 }}
               >
@@ -1270,7 +1225,7 @@ export default function Game() {
                 }}>
                   {renderSeatLabel(NORTH)}
                   <Hand cards={hands[svrSeat]} position="north" faceDown
-                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    isCurrentTurn={currentPlayer === svrSeat && phase === PHASE_TRICK_PLAY}
                     dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
                 </div>
               );
@@ -1289,7 +1244,7 @@ export default function Game() {
                 }}>
                   {renderSeatLabel(WEST)}
                   <Hand cards={hands[svrSeat]} position="west" faceDown
-                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    isCurrentTurn={currentPlayer === svrSeat && phase === PHASE_TRICK_PLAY}
                     dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
                 </div>
               );
@@ -1308,7 +1263,7 @@ export default function Game() {
                 }}>
                   {renderSeatLabel(EAST)}
                   <Hand cards={hands[svrSeat]} position="east" faceDown
-                    isCurrentTurn={currentPlayer === svrSeat && phase === 'trickPlay'}
+                    isCurrentTurn={currentPlayer === svrSeat && phase === PHASE_TRICK_PLAY}
                     dimLevel={getDimLevel(svrSeat)} backColor={backColor} />
                 </div>
               );
@@ -1345,63 +1300,19 @@ export default function Game() {
 
             {/* ── TRICK AREA / CUT FOR DEAL ── */}
             <TrickArea
-              trickPlays={phase === 'cutForDeal' ? displayCutCards : displayTrickPlays}
-              trickWinner={phase === 'cutForDeal'
+              trickPlays={phase === PHASE_CUT ? displayCutCards : displayTrickPlays}
+              trickWinner={phase === PHASE_CUT
                 ? (cutWinner !== null ? displaySeat(cutWinner) : null)
                 : (trickWinner !== null ? displaySeat(trickWinner) : null)}
             />
 
             {/* ── FLOATING BID BUBBLES ── */}
-            {phase === 'bidding' && (() => {
-              const bubblePositions = {
-                [SOUTH]: { top: '72%', left: '50%' },
-                [NORTH]: { top: '28%', left: '50%' },
-                [WEST]:  { top: '42%', left: '20%' },
-                [EAST]:  { top: '42%', left: '80%' },
-              };
-              return DISPLAY_POSITIONS.map(dp => {
-                const { svrSeat } = getSeatInfo(dp);
-                const bubble = bidBubbles[svrSeat];
-                if (!bubble) return null;
-                const pos = bubblePositions[dp];
-                const isBid = bubble !== 'PASS';
-                return (
-                  <div key={`bid-bubble-${dp}`} style={{
-                    position: 'absolute',
-                    ...pos,
-                    zIndex: 25,
-                    animation: 'bidPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
-                    pointerEvents: 'none',
-                  }}>
-                    <div style={{
-                      padding: 'clamp(8px, 2vw, 12px) clamp(16px, 4vw, 24px)',
-                      borderRadius: 14,
-                      background: isBid ? 'rgba(200,170,80,0.15)' : 'rgba(0,0,0,0.3)',
-                      border: isBid ? '1.5px solid rgba(200,170,80,0.4)' : '1px solid rgba(255,255,255,0.08)',
-                      backdropFilter: 'blur(12px)',
-                      WebkitBackdropFilter: 'blur(12px)',
-                      boxShadow: isBid
-                        ? '0 4px 20px rgba(200,170,80,0.2), 0 0 40px rgba(200,170,80,0.08)'
-                        : '0 4px 12px rgba(0,0,0,0.3)',
-                    }}>
-                      <div style={{
-                        fontSize: isBid ? 'clamp(16px, 4.5vw, 22px)' : 'clamp(13px, 3.5vw, 16px)',
-                        fontWeight: 700,
-                        color: isBid ? '#c8aa50' : 'rgba(255,255,255,0.3)',
-                        letterSpacing: isBid ? 3 : 2,
-                        textAlign: 'center',
-                        textShadow: isBid ? '0 0 12px rgba(200,170,80,0.4)' : 'none',
-                      }}>
-                        {bubble}
-                      </div>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
+            {phase === PHASE_BIDDING && (
+              <BidBubbles bidBubbles={bidBubbles} getSeatInfo={getSeatInfo} />
+            )}
 
             {/* Cut for deal label */}
-            {phase === 'cutForDeal' && (
+            {phase === PHASE_CUT && (
               <div style={{
                 position: 'absolute',
                 top: '28%',
@@ -1462,7 +1373,7 @@ export default function Game() {
               transition: 'bottom 0.3s ease',
             }}>
               {/* Follow-suit / turn status badge */}
-              {isHumanTurn && phase === 'trickPlay' && (
+              {isHumanTurn && phase === PHASE_TRICK_PLAY && (
                 mustFollow ? (
                   <div style={{
                     marginBottom: 8, padding: 'clamp(6px, 1.5vw, 8px) clamp(16px, 4vw, 24px)',
@@ -1497,7 +1408,7 @@ export default function Game() {
               )}
 
               {/* Pitching prompt */}
-              {phase === 'pitching' && currentPlayer === myActualSeat && (
+              {phase === PHASE_PITCHING && currentPlayer === myActualSeat && (
                 <div style={{
                   marginBottom: 8, padding: 'clamp(8px, 2vw, 10px) clamp(16px, 4vw, 24px)',
                   borderRadius: 20,
@@ -1537,7 +1448,7 @@ export default function Game() {
                     maxWidth: 'calc(100vw - 24px)',
                   }}>
                     {validBids.map((b, i) => (
-                      <button key={b} className="btn" onClick={() => {
+                      <button key={b} className="btn" aria-label={b === 0 ? 'Pass' : `Bid ${b}`} onClick={() => {
                         if (navigator.vibrate) navigator.vibrate(10);
                         makeBid(b);
                       }}
@@ -1574,10 +1485,10 @@ export default function Game() {
               {/* Status message */}
               {!isHumanTurn && !isHumanBidding && statusMsg && (
                 <div style={{
-                  fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.25)',
+                  fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.55)',
                   marginTop: 2, whiteSpace: 'nowrap',
                 }}>
-                  {isOnline && statusMsg ? statusMsg : (!isOnline ? statusMsg : '')}
+                  {statusMsg}
                 </div>
               )}
             </div>
@@ -1735,7 +1646,7 @@ export default function Game() {
             }}>
               {/* Who bid */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.3)', letterSpacing: 2, fontWeight: 500 }}>
+                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.55)', letterSpacing: 2, fontWeight: 500 }}>
                   {bidTeamLabel} BID
                 </span>
                 <span style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: bidTeamColor }}>
@@ -1761,7 +1672,7 @@ export default function Game() {
 
               {/* Got count */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.3)', letterSpacing: 2, fontWeight: 500 }}>
+                <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.55)', letterSpacing: 2, fontWeight: 500 }}>
                   {bidTeamLabel} GOT
                 </span>
                 <span style={{
@@ -1816,7 +1727,7 @@ export default function Game() {
                     </div>
                     <span style={{
                       fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600,
-                      color: 'rgba(255,255,255,0.3)', letterSpacing: 1,
+                      color: 'rgba(255,255,255,0.55)', letterSpacing: 1,
                     }}>{pt.label}</span>
                     <span style={{
                       fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 700,
@@ -1847,7 +1758,7 @@ export default function Game() {
             <div style={{ textAlign: 'center' }}>
               <div style={{
                 fontSize: 'clamp(8px, 2.2vw, 10px)', fontWeight: 600,
-                color: 'rgba(255,255,255,0.25)', letterSpacing: 2, marginBottom: 4,
+                color: 'rgba(255,255,255,0.55)', letterSpacing: 2, marginBottom: 4,
               }}>GAME SCORE</div>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 16,
@@ -1868,7 +1779,7 @@ export default function Game() {
             </div>
 
             {isOnline ? (
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', animation: 'pulse 2s ease-in-out infinite' }}>
                 Next hand starting...
               </div>
             ) : (
