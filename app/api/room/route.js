@@ -7,10 +7,13 @@ import {
   updateScores, nextDealer, cardEquals, createDeck, shuffleDeck,
 } from '@/lib/game';
 import { getAiBid, getAiPlay, getAiTrumpCard } from '@/lib/ai';
+import {
+  PHASE_CUT, PHASE_BIDDING, PHASE_PITCHING,
+  PHASE_TRICK_PLAY, PHASE_TRICK_COLLECT, PHASE_HAND_OVER, PHASE_GAME_OVER,
+  PHASE_WAITING, SERVER_AI_DELAY, SERVER_PHASE_DELAY, COLORS,
+} from '@/lib/constants';
 
 const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const AI_DELAY = 800; // ms between AI actions
-const PHASE_DELAY = 1500; // ms for phase transitions (trick collect, etc.)
 
 function generateCode() {
   let code = '';
@@ -18,6 +21,15 @@ function generateCode() {
     code += ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)];
   }
   return code;
+}
+
+function isValidCode(code) {
+  return typeof code === 'string' && /^[A-Z0-9]{4}$/.test(code);
+}
+
+function isValidCard(card) {
+  return card && typeof card.rank === 'number' && typeof card.suit === 'string'
+    && card.rank >= 2 && card.rank <= 14 && 'SHDC'.includes(card.suit);
 }
 
 function isAiSeat(room, seat) {
@@ -54,14 +66,14 @@ function filterForPlayer(room, playerId) {
 
   const myHand = room.hands?.[mySeat] || [];
   const playableCards =
-    room.phase === 'trickPlay' && room.currentPlayer === mySeat
+    room.phase === PHASE_TRICK_PLAY && room.currentPlayer === mySeat
       ? getPlayableCards(myHand, room.trumpSuit, ledSuit)
-      : room.phase === 'pitching' && room.currentPlayer === mySeat
+      : room.phase === PHASE_PITCHING && room.currentPlayer === mySeat
         ? myHand
         : [];
 
   const validBids =
-    room.phase === 'bidding' && room.currentBidder === mySeat
+    room.phase === PHASE_BIDDING && room.currentBidder === mySeat
       ? getValidBids(
           room.highBid?.amount || 0,
           mySeat === room.dealer,
@@ -119,7 +131,7 @@ function startCutForDeal(room) {
   for (let i = 1; i < cutCards.length; i++) {
     if (cutCards[i].card.rank > winner.card.rank) winner = cutCards[i];
   }
-  room.phase = 'cutForDeal';
+  room.phase = PHASE_CUT;
   room.cutCards = cutCards;
   room.cutWinner = winner.player;
   room.dealer = winner.player;
@@ -131,7 +143,7 @@ function startDealing(room) {
   const hands = dealHands(room.dealer);
   room.hands = hands;
   room.originalHands = hands.map(h => [...h]);
-  room.phase = 'bidding';
+  room.phase = PHASE_BIDDING;
   room.bids = [];
   room.highBid = { seat: -1, amount: 0 };
   room.bidBubbles = {};
@@ -162,7 +174,7 @@ function applyBid(room, seat, bidAmount) {
     // Bidding complete
     const winner = room.highBid.seat;
     room.currentPlayer = winner;
-    room.phase = 'pitching';
+    room.phase = PHASE_PITCHING;
     room.statusMsg = `${room.playerNames[winner]} won the bid with ${room.highBid.amount}`;
     room.biddingTeam = getTeam(winner);
     room.bidAmount = room.highBid.amount;
@@ -178,7 +190,7 @@ function applyPitch(room, seat, card) {
   room.trickPlays = [{ player: seat, card }];
   room.hands[seat] = room.hands[seat].filter(c => !cardEquals(c, card));
   room.currentPlayer = (seat + 1) % 4;
-  room.phase = 'trickPlay';
+  room.phase = PHASE_TRICK_PLAY;
   room.statusMsg = '';
   room.lastActionAt = Date.now();
 }
@@ -195,7 +207,7 @@ function applyPlay(room, seat, card) {
       winner,
       cards: [...room.trickPlays],
     });
-    room.phase = 'trickCollect';
+    room.phase = PHASE_TRICK_COLLECT;
     room.lastActionAt = Date.now();
   } else {
     room.currentPlayer = (seat + 1) % 4;
@@ -214,7 +226,7 @@ function advanceAfterTrickCollect(room) {
     room.handResult = result;
     room.wasSet = wasSet;
     room.gameWinner = gameWinner;
-    room.phase = gameWinner !== null ? 'gameOver' : 'handOver';
+    room.phase = gameWinner !== null ? PHASE_GAME_OVER : PHASE_HAND_OVER;
     room.lastActionAt = Date.now();
   } else {
     // Next trick
@@ -222,7 +234,7 @@ function advanceAfterTrickCollect(room) {
     room.trickPlays = [];
     room.trickWinner = null;
     room.currentPlayer = room.capturedTricks[room.capturedTricks.length - 1].winner;
-    room.phase = 'trickPlay';
+    room.phase = PHASE_TRICK_PLAY;
     room.lastActionAt = Date.now();
   }
 }
@@ -239,23 +251,23 @@ function processAiTick(room) {
   const elapsed = now - (room.lastActionAt || 0);
 
   // Phase transitions that need timing
-  if (room.phase === 'cutForDeal' && elapsed >= 2500) {
+  if (room.phase === PHASE_CUT && elapsed >= 2500) {
     startDealing(room);
     return true;
   }
 
-  if (room.phase === 'trickCollect' && elapsed >= PHASE_DELAY) {
+  if (room.phase === PHASE_TRICK_COLLECT && elapsed >= SERVER_PHASE_DELAY) {
     advanceAfterTrickCollect(room);
     return true;
   }
 
-  if (room.phase === 'handOver' && elapsed >= 3000) {
+  if (room.phase === PHASE_HAND_OVER && elapsed >= 3000) {
     advanceAfterHandOver(room);
     return true;
   }
 
   // AI bidding
-  if (room.phase === 'bidding' && isAiSeat(room, room.currentBidder) && elapsed >= AI_DELAY) {
+  if (room.phase === PHASE_BIDDING && isAiSeat(room, room.currentBidder) && elapsed >= SERVER_AI_DELAY) {
     const seat = room.currentBidder;
     const hand = room.hands[seat];
     const allPassedToDealer = room.bids.length === 3 && (room.highBid?.amount || 0) === 0;
@@ -274,7 +286,7 @@ function processAiTick(room) {
   }
 
   // AI pitching
-  if (room.phase === 'pitching' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === PHASE_PITCHING && isAiSeat(room, room.currentPlayer) && elapsed >= SERVER_AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const preferredSuit = room.aiPreferredSuit?.[seat] || hand[0]?.suit;
@@ -284,7 +296,7 @@ function processAiTick(room) {
   }
 
   // AI trick play
-  if (room.phase === 'trickPlay' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === PHASE_TRICK_PLAY && isAiSeat(room, room.currentPlayer) && elapsed >= SERVER_AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const card = getAiPlay(
@@ -357,7 +369,7 @@ export async function POST(request) {
       player1: { id: playerId, name: playerName },
       player2: null,
       dealer: SOUTH,
-      phase: 'waiting',
+      phase: PHASE_WAITING,
       hands: [[], [], [], []],
       originalHands: [[], [], [], []],
       trumpSuit: null,
@@ -392,6 +404,9 @@ export async function POST(request) {
   // ── JOIN ──
   if (action === 'join') {
     const { code, playerId, playerName } = body;
+    if (!isValidCode(code)) {
+      return NextResponse.json({ error: 'Invalid room code' }, { status: 400 });
+    }
     const room = await getRoom(code);
 
     if (!room) {
@@ -426,7 +441,7 @@ export async function POST(request) {
 
     const seat = getPlayerSeat(room, playerId);
     if (seat === null) return NextResponse.json({ error: 'Not in room' }, { status: 403 });
-    if (room.phase !== 'bidding') return NextResponse.json({ error: 'Not bidding phase' }, { status: 400 });
+    if (room.phase !== PHASE_BIDDING) return NextResponse.json({ error: 'Not bidding phase' }, { status: 400 });
     if (room.currentBidder !== seat) return NextResponse.json({ error: 'Not your turn to bid' }, { status: 403 });
 
     // Validate bid
@@ -451,14 +466,15 @@ export async function POST(request) {
     if (seat === null) return NextResponse.json({ error: 'Not in room' }, { status: 403 });
     if (room.currentPlayer !== seat) return NextResponse.json({ error: 'Not your turn' }, { status: 403 });
 
-    // Validate card is in hand
+    // Validate card shape and presence in hand
+    if (!isValidCard(card)) return NextResponse.json({ error: 'Invalid card' }, { status: 400 });
     const hand = room.hands[seat];
     const cardInHand = hand.find(c => cardEquals(c, card));
     if (!cardInHand) return NextResponse.json({ error: 'Card not in hand' }, { status: 400 });
 
-    if (room.phase === 'pitching') {
+    if (room.phase === PHASE_PITCHING) {
       applyPitch(room, seat, card);
-    } else if (room.phase === 'trickPlay') {
+    } else if (room.phase === PHASE_TRICK_PLAY) {
       // Validate card is playable
       const ledSuit = room.trickPlays.length > 0 ? room.trickPlays[0].card.suit : null;
       const playable = getPlayableCards(hand, room.trumpSuit, ledSuit);

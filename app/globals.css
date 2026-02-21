@@ -26,6 +26,8 @@ html, body {
 html { height: -webkit-fill-available; }
 body { min-height: -webkit-fill-available; min-height: 100dvh; }
 
+/* ═══ KEYFRAME ANIMATIONS ═══ */
+
 @keyframes confettiFall {
   0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
   100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
@@ -46,11 +48,6 @@ body { min-height: -webkit-fill-available; min-height: 100dvh; }
   50% { opacity: 1; }
 }
 
-@keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
-}
-
 @keyframes breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.04); }
@@ -67,12 +64,11 @@ body { min-height: -webkit-fill-available; min-height: 100dvh; }
   100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
+/* GPU-composited glow: animate opacity on pseudo-element instead of box-shadow */
 @keyframes glowPulse {
-  0%, 100% { box-shadow: 0 0 8px rgba(200,170,80,0.2), inset 0 0 8px rgba(200,170,80,0.05); }
-  50% { box-shadow: 0 0 20px rgba(200,170,80,0.4), inset 0 0 12px rgba(200,170,80,0.1); }
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
-
-.scanlines { display: none; }
 
 /* ═══ THE TABLE IS THE SCREEN ═══ */
 .room-bg {
@@ -87,11 +83,25 @@ body { min-height: -webkit-fill-available; min-height: 100dvh; }
   z-index: 1;
 }
 
+/* ═══ GLASS UTILITY CLASSES ═══ */
+.glass-sm {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.glass-md {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.glass-lg {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
 /* ═══ BUTTONS ═══ */
 .btn {
   border: 1px solid rgba(255,255,255,0.12);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
   background: rgba(255,255,255,0.04);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -127,7 +137,7 @@ body { min-height: -webkit-fill-available; min-height: 100dvh; }
 
 /* ═══ CARDS ═══ */
 .card-base {
-  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   user-select: none;
@@ -224,6 +234,17 @@ body { min-height: -webkit-fill-available; min-height: 100dvh; }
   -webkit-backdrop-filter: blur(8px);
   font-size: clamp(9px, 2.5vw, 11px);
   font-weight: 400;
+}
+
+/* ═══ ACCESSIBILITY ═══ */
+:focus-visible {
+  outline: 2px solid rgba(200, 170, 80, 0.6);
+  outline-offset: 2px;
+}
+
+/* Input focus state via CSS instead of inline JS handlers */
+input:focus {
+  border-color: rgba(200, 170, 80, 0.4) !important;
 }
 
 /* Safe area support */
