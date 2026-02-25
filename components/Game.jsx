@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   SOUTH, WEST, NORTH, EAST, TEAM_A, TEAM_B,
-  getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, SEAT_NAMES, isRedSuit,
+  getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, isRedSuit,
   dealHands, getValidBids, getPlayableCards, evaluateTrick,
   scoreHand, updateScores, nextDealer, cardEquals, cardId,
   getLivePoints, cardDisplay, createDeck, shuffleDeck,
@@ -95,6 +95,7 @@ export default function Game() {
   const [wasSet, setWasSet] = useState(false);
   const [gameWinner, setGameWinner] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [showMiniConfetti, setShowMiniConfetti] = useState(false);
 
   // ── Cut for deal ──
   const [cutCards, setCutCards] = useState([]);
@@ -235,8 +236,13 @@ export default function Game() {
 
     // Handle set back sound
     if (state.phase === 'handOver' && prev?.phase !== 'handOver') {
-      if (state.wasSet) sounds.setBack();
-      else sounds.madeIt();
+      if (state.wasSet) {
+        sounds.setBack();
+      } else {
+        sounds.madeIt();
+        setShowMiniConfetti(true);
+        setTimeout(() => setShowMiniConfetti(false), 2500);
+      }
     }
 
     lastStateRef.current = state;
@@ -415,12 +421,12 @@ export default function Game() {
         setStatusMsg("Your bid");
         sounds.turn();
       } else {
-        setStatusMsg(`${SEAT_NAMES[first]} is bidding...`);
+        setStatusMsg(`${getPlayerName(first)} is bidding...`);
       }
     }, 800);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, screen, phase, dealer]);
+  }, [mode, screen, phase, dealer, getPlayerName]);
 
   // ── BIDDING AI (solo) ──
   useEffect(() => {
@@ -466,7 +472,7 @@ export default function Game() {
           setStatusMsg("Your bid");
           sounds.turn();
         } else {
-          setStatusMsg(`${SEAT_NAMES[next]} is bidding...`);
+          setStatusMsg(`${getPlayerName(next)} is bidding...`);
         }
       }
     }, AI_BID_DELAY);
@@ -496,7 +502,7 @@ export default function Game() {
         setStatusMsg("Your turn");
         sounds.turn();
       } else {
-        setStatusMsg(`${SEAT_NAMES[np]} is playing...`);
+        setStatusMsg(`${getPlayerName(np)} is playing...`);
       }
     }, 600);
 
@@ -532,7 +538,7 @@ export default function Game() {
           setStatusMsg("Your turn");
           sounds.turn();
         } else {
-          setStatusMsg(`${SEAT_NAMES[np]} is playing...`);
+          setStatusMsg(`${getPlayerName(np)} is playing...`);
         }
       }
     }, AI_DELAY);
@@ -547,7 +553,7 @@ export default function Game() {
 
     const winner = evaluateTrick(trickPlays, trumpSuit);
     setTrickWinner(winner);
-    setStatusMsg(`${SEAT_NAMES[winner]} wins the trick!`);
+    setStatusMsg(`${getPlayerName(winner)} wins the trick!`);
     sounds.trickWon();
 
     timerRef.current = setTimeout(() => {
@@ -567,8 +573,13 @@ export default function Game() {
         setWasSet(ws);
         setScores(newScores);
 
-        if (ws) sounds.setBack();
-        else sounds.madeIt();
+        if (ws) {
+          sounds.setBack();
+        } else {
+          sounds.madeIt();
+          setShowMiniConfetti(true);
+          setTimeout(() => setShowMiniConfetti(false), 2500);
+        }
 
         if (gw !== null) {
           setGameWinner(gw);
@@ -591,7 +602,7 @@ export default function Game() {
           setStatusMsg("Your lead");
           sounds.turn();
         } else {
-          setStatusMsg(`${SEAT_NAMES[winner]} leads...`);
+          setStatusMsg(`${getPlayerName(winner)} leads...`);
         }
       }
     }, TRICK_PAUSE);
@@ -636,9 +647,9 @@ export default function Game() {
     } else {
       const next = (SOUTH + 1) % 4;
       setCurrentBidder(next);
-      setStatusMsg(`${SEAT_NAMES[next]} is bidding...`);
+      setStatusMsg(`${getPlayerName(next)} is bidding...`);
     }
-  }, [mode, roomCode, playerId, bids, highBid, initAudio]);
+  }, [mode, roomCode, playerId, bids, highBid, initAudio, getPlayerName]);
 
   // ── Human: play card ──
   const playCard = useCallback((card) => {
@@ -669,9 +680,9 @@ export default function Game() {
     } else {
       const np = (SOUTH + 1) % 4;
       setCurrentPlayer(np);
-      setStatusMsg(`${SEAT_NAMES[np]} is playing...`);
+      setStatusMsg(`${getPlayerName(np)} is playing...`);
     }
-  }, [mode, roomCode, playerId, phase, trickPlays, initAudio]);
+  }, [mode, roomCode, playerId, phase, trickPlays, initAudio, getPlayerName]);
 
   // ── Next hand (solo) ──
   const nextHand = useCallback(() => {
@@ -747,6 +758,13 @@ export default function Game() {
     const backColor = getTeam(svrSeat) === TEAM_A ? 'blue' : 'red';
     return { svrSeat, name, teamColor, backColor };
   }, [serverSeat, getPlayerName]);
+
+  // Player name map for TrickArea winner labels
+  const displayPlayerNames = {};
+  DISPLAY_POSITIONS.forEach(dp => {
+    const { name } = getSeatInfo(dp);
+    displayPlayerNames[dp] = name;
+  });
 
   // ── Seat label renderer ──
   const renderSeatLabel = (displayPos) => {
@@ -829,6 +847,7 @@ export default function Game() {
 
       <div className="scanlines" />
       {showConfetti && <Confetti />}
+      {showMiniConfetti && <Confetti mini />}
 
       {/* ── LOBBY ── */}
       {screen === "lobby" && (
@@ -880,13 +899,11 @@ export default function Game() {
               {/* Mode not selected yet */}
               {!lobbyAction && (
                 <>
-                  <button className="btn w-full" onClick={() => setScreen("difficulty")}
-                    style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
+                  <button className="btn w-full" onClick={() => setScreen("difficulty")}>
                     PLAY SOLO
                   </button>
 
-                  <button className="btn w-full" onClick={() => setLobbyAction('enterName')}
-                    style={{ color: '#6b8aad', borderColor: 'rgba(107,138,173,0.3)' }}>
+                  <button className="btn w-full" onClick={() => setLobbyAction('enterName')}>
                     PLAY ONLINE
                   </button>
 
@@ -1328,6 +1345,7 @@ export default function Game() {
                 border: '1px solid rgba(255,255,255,0.1)',
                 backdropFilter: 'blur(8px)',
                 WebkitBackdropFilter: 'blur(8px)',
+                animation: 'trumpReveal 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
               }}>
                 <span style={{
                   fontSize: 'clamp(8px, 2vw, 9px)',
@@ -1349,6 +1367,8 @@ export default function Game() {
               trickWinner={phase === 'cutForDeal'
                 ? (cutWinner !== null ? displaySeat(cutWinner) : null)
                 : (trickWinner !== null ? displaySeat(trickWinner) : null)}
+              playerNames={displayPlayerNames}
+              isCutForDeal={phase === 'cutForDeal'}
             />
 
             {/* ── FLOATING BID BUBBLES ── */}
@@ -1418,6 +1438,7 @@ export default function Game() {
                   letterSpacing: cutWinner ? 3 : 2,
                   whiteSpace: 'nowrap',
                   transition: 'all 0.3s',
+                  animation: cutWinner ? 'scoreCount 0.4s ease-out' : undefined,
                 }}>
                   {isOnline
                     ? (cutWinner !== null
@@ -1429,6 +1450,7 @@ export default function Game() {
                 {cutWinner && (
                   <div style={{
                     display: 'flex', alignItems: 'center', gap: 8,
+                    animation: 'scoreCount 0.5s 0.2s ease-out both',
                   }}>
                     <span style={{
                       fontSize: 'clamp(12px, 3.5vw, 14px)', fontWeight: 800,
@@ -1450,6 +1472,28 @@ export default function Game() {
               </div>
             )}
 
+
+            {/* ── FLOATING STATUS TOAST ── */}
+            {!isHumanTurn && !isHumanBidding && statusMsg && phase !== 'cutForDeal' && phase !== 'pitching' && (
+              <div style={{
+                position: 'absolute',
+                top: 'clamp(12%, 15%, 17%)',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 20,
+                animation: 'toastEnter 0.3s ease-out',
+                pointerEvents: 'none',
+              }}>
+                <div className="status-bar status-bar--turn" style={{
+                  fontSize: 'clamp(11px, 3vw, 13px)',
+                  fontWeight: 600,
+                  letterSpacing: 1.5,
+                  padding: 'clamp(6px, 1.5vw, 8px) clamp(14px, 4vw, 22px)',
+                }}>
+                  {statusMsg}
+                </div>
+              </div>
+            )}
 
             {/* ── SOUTH AREA (always the local player) ── */}
             <div style={{
@@ -1520,6 +1564,40 @@ export default function Game() {
                   marginBottom: 8,
                   animation: 'slideUp 0.3s ease-out',
                 }}>
+                  {/* Bid history strip */}
+                  {bids.length > 0 && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 'clamp(4px, 1.5vw, 8px)',
+                      padding: 'clamp(4px, 1vw, 6px) clamp(10px, 3vw, 16px)',
+                      borderRadius: 12,
+                      background: 'rgba(0,0,0,0.2)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      fontSize: 'clamp(9px, 2.5vw, 11px)',
+                      fontWeight: 600,
+                      animation: 'fadeIn 0.3s ease-out',
+                    }}>
+                      {bids.map((b, i) => (
+                        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 'clamp(3px, 1vw, 6px)' }}>
+                          {i > 0 && (
+                            <span style={{ color: 'rgba(255,255,255,0.1)', fontSize: 'clamp(8px, 2vw, 10px)' }}>{'\u203A'}</span>
+                          )}
+                          <span style={{
+                            color: b.bid > 0 ? '#c8aa50' : 'rgba(255,255,255,0.25)',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            <span style={{
+                              color: getTeam(b.seat) === TEAM_A ? '#6b8aad' : '#ad6b6b',
+                              marginRight: 3, fontSize: 'clamp(7px, 2vw, 9px)',
+                            }}>{getPlayerName(b.seat)}</span>
+                            {b.bid > 0 ? b.bid : 'P'}
+                          </span>
+                        </span>
+                      ))}
+                      <span style={{ color: 'rgba(255,255,255,0.1)', fontSize: 'clamp(8px, 2vw, 10px)' }}>{'\u203A'}</span>
+                      <span style={{ color: '#c8aa50', animation: 'pulse 1.5s ease-in-out infinite' }}>?</span>
+                    </div>
+                  )}
+
                   <div style={{
                     fontSize: 'clamp(12px, 3.5vw, 14px)', fontWeight: 700,
                     color: '#c8aa50', letterSpacing: 2,
@@ -1536,24 +1614,34 @@ export default function Game() {
                     flexWrap: 'wrap', justifyContent: 'center',
                     maxWidth: 'calc(100vw - 24px)',
                   }}>
-                    {validBids.map((b, i) => (
-                      <button key={b} className="btn" onClick={() => {
-                        if (navigator.vibrate) navigator.vibrate(10);
-                        makeBid(b);
-                      }}
-                        style={{
-                          color: b === 0 ? 'rgba(255,255,255,0.4)' : '#c8aa50',
-                          borderColor: b === 0 ? 'rgba(255,255,255,0.1)' : 'rgba(200,170,80,0.35)',
-                          background: b === 0 ? 'rgba(0,0,0,0.2)' : 'rgba(200,170,80,0.06)',
-                          fontSize: 'clamp(12px, 3.2vw, 14px)',
-                          fontWeight: 700,
-                          padding: 'clamp(8px, 2vw, 12px) clamp(16px, 4vw, 24px)',
-                          minWidth: b === 0 ? undefined : 'clamp(60px, 16vw, 80px)',
-                          animation: b > 0 ? `slideUp ${0.3 + i * 0.08}s ease-out` : undefined,
-                        }}>
-                        {b === 0 ? 'PASS' : `BID ${b}`}
-                      </button>
-                    ))}
+                    {validBids.map((b, i) => {
+                      const isPass = b === 0;
+                      return (
+                        <button key={b} className="btn" onClick={() => {
+                          if (navigator.vibrate) navigator.vibrate(10);
+                          makeBid(b);
+                        }}
+                          style={{
+                            color: isPass ? 'rgba(255,255,255,0.3)' : '#c8aa50',
+                            borderColor: isPass ? 'rgba(255,255,255,0.06)' : 'rgba(200,170,80,0.4)',
+                            background: isPass ? 'rgba(0,0,0,0.25)' : 'rgba(200,170,80,0.08)',
+                            fontSize: isPass ? 'clamp(10px, 2.8vw, 12px)' : 'clamp(13px, 3.5vw, 15px)',
+                            fontWeight: isPass ? 500 : 700,
+                            padding: isPass
+                              ? 'clamp(6px, 1.5vw, 8px) clamp(14px, 3.5vw, 20px)'
+                              : 'clamp(10px, 2.5vw, 14px) clamp(18px, 5vw, 28px)',
+                            minWidth: isPass ? undefined : 'clamp(64px, 17vw, 84px)',
+                            minHeight: 44,
+                            animation: `slideUp ${0.3 + i * 0.08}s ease-out`,
+                            boxShadow: isPass
+                              ? 'none'
+                              : '0 0 12px rgba(200,170,80,0.1), inset 0 1px 0 rgba(200,170,80,0.1)',
+                            letterSpacing: isPass ? '0.05em' : '0.12em',
+                          }}>
+                          {isPass ? 'PASS' : `BID ${b}`}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1571,15 +1659,6 @@ export default function Game() {
                 {renderSeatLabel(SOUTH)}
               </div>
 
-              {/* Status message */}
-              {!isHumanTurn && !isHumanBidding && statusMsg && (
-                <div style={{
-                  fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.25)',
-                  marginTop: 2, whiteSpace: 'nowrap',
-                }}>
-                  {isOnline && statusMsg ? statusMsg : (!isOnline ? statusMsg : '')}
-                </div>
-              )}
             </div>
 
             {/* ── HORIZONTAL POINT TRACKER BAR ── */}
@@ -1610,25 +1689,35 @@ export default function Game() {
                       flex: 1,
                       display: 'flex', flexDirection: 'column', alignItems: 'center',
                       gap: 2,
-                      padding: 'clamp(4px, 1vw, 8px) 0',
+                      padding: 'clamp(5px, 1.2vw, 9px) 0',
                       borderRadius: 8,
-                      background: 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.05)',
+                      background: pt.label === 'GAME'
+                        ? 'rgba(255,255,255,0.04)'
+                        : pt.team === TEAM_A ? 'rgba(107,138,173,0.08)'
+                        : pt.team === TEAM_B ? 'rgba(173,107,107,0.08)'
+                        : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${
+                        pt.label === 'GAME'
+                          ? 'rgba(255,255,255,0.06)'
+                          : pt.team === TEAM_A ? 'rgba(107,138,173,0.15)'
+                          : pt.team === TEAM_B ? 'rgba(173,107,107,0.15)'
+                          : 'rgba(255,255,255,0.05)'
+                      }`,
                     }}>
                       <span style={{
-                        fontSize: 'clamp(7px, 2vw, 9px)',
-                        color: 'rgba(255,255,255,0.3)',
+                        fontSize: 'clamp(8px, 2.2vw, 10px)',
+                        color: 'rgba(255,255,255,0.35)',
                         fontWeight: 600, letterSpacing: 1.5,
                       }}>{pt.label}</span>
                       {pt.label === 'GAME' ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <span style={{ fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700, color: '#6b8aad' }}>{pt.gameA}</span>
-                          <span style={{ fontSize: 'clamp(8px, 2vw, 10px)', color: 'rgba(255,255,255,0.1)' }}>-</span>
-                          <span style={{ fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700, color: '#ad6b6b' }}>{pt.gameB}</span>
+                          <span style={{ fontSize: 'clamp(14px, 4vw, 18px)', fontWeight: 700, color: '#6b8aad' }}>{pt.gameA}</span>
+                          <span style={{ fontSize: 'clamp(8px, 2vw, 10px)', color: 'rgba(255,255,255,0.12)' }}>-</span>
+                          <span style={{ fontSize: 'clamp(14px, 4vw, 18px)', fontWeight: 700, color: '#ad6b6b' }}>{pt.gameB}</span>
                         </div>
                       ) : (
                         <span style={{
-                          fontSize: 'clamp(12px, 3.5vw, 16px)', fontWeight: 700,
+                          fontSize: 'clamp(14px, 4vw, 18px)', fontWeight: 700,
                           color: pt.team === TEAM_A ? '#6b8aad'
                             : pt.team === TEAM_B ? '#ad6b6b'
                             : pt.team === 'none' ? 'rgba(255,255,255,0.08)'
@@ -1641,7 +1730,7 @@ export default function Game() {
                         </span>
                       )}
                       {pt.card && (
-                        <span style={{ fontSize: 'clamp(7px, 2vw, 9px)', color: 'rgba(255,255,255,0.15)' }}>
+                        <span style={{ fontSize: 'clamp(8px, 2.2vw, 10px)', color: 'rgba(255,255,255,0.25)' }}>
                           {cardDisplay(pt.card)}
                         </span>
                       )}
@@ -1711,6 +1800,7 @@ export default function Game() {
                 fontSize: 'clamp(20px, 6vw, 28px)', fontWeight: 700, marginTop: 4,
                 color: wasSet ? '#ad6b6b' : '#7a9b8a',
                 letterSpacing: 2,
+                animation: 'scoreCount 0.5s ease-out',
               }}>
                 {wasSet ? 'SET BACK!' : 'MADE IT!'}
               </div>
@@ -1738,7 +1828,7 @@ export default function Game() {
                 <span style={{ fontSize: 'clamp(9px, 2.5vw, 11px)', color: 'rgba(255,255,255,0.3)', letterSpacing: 2, fontWeight: 500 }}>
                   {bidTeamLabel} BID
                 </span>
-                <span style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: bidTeamColor }}>
+                <span style={{ fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700, color: bidTeamColor, animation: 'scoreCount 0.4s 0.2s ease-out both' }}>
                   {bidAmount}
                 </span>
               </div>
@@ -1767,6 +1857,7 @@ export default function Game() {
                 <span style={{
                   fontSize: 'clamp(22px, 6vw, 28px)', fontWeight: 700,
                   color: madeIt ? '#7a9b8a' : '#ad6b6b',
+                  animation: 'scoreCount 0.4s 0.5s ease-out both',
                 }}>
                   {bidderPts}
                 </span>

@@ -3,14 +3,14 @@ import { useRef } from "react";
 
 const COLORS = ["#ff4757", "#ffd32a", "#ff6b81", "#7bed9f", "#70a1ff", "#ff6348", "#eccc68"];
 
-export default function Confetti() {
+export default function Confetti({ mini = false }) {
   const pieces = useRef(
-    Array.from({ length: 50 }, (_, i) => ({
+    Array.from({ length: mini ? 25 : 50 }, (_, i) => ({
       id: i,
       x: Math.random() * 100,
       color: COLORS[i % COLORS.length],
       delay: Math.random() * 0.5,
-      duration: 1.5 + Math.random() * 2,
+      duration: mini ? (0.8 + Math.random() * 1.2) : (1.5 + Math.random() * 2),
       size: 4 + Math.random() * 8,
       rotation: Math.random() * 360,
       drift: (Math.random() - 0.5) * 40,

@@ -122,12 +122,12 @@ export default function Card({
         position: 'relative',
         flexShrink: 0,
         opacity: dimmed ? 0.25 : 1,
-        filter: dimmed ? 'saturate(0.3)' : 'none',
+        filter: dimmed ? 'saturate(0.3) grayscale(0.7)' : 'none',
         transform: dimmed ? 'scale(0.96)' : 'none',
         pointerEvents: dimmed ? 'none' : undefined,
         boxShadow: playable
-          ? '0 0 0 1px rgba(200,170,80,0.3), 0 4px 16px rgba(0,0,0,0.3)'
-          : '0 1px 4px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1)',
+          ? undefined
+          : (dimmed ? 'none' : '0 1px 4px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1)'),
         transition: 'transform 0.2s, box-shadow 0.2s, opacity 0.2s, filter 0.2s',
         WebkitTapHighlightColor: 'transparent',
         touchAction: 'manipulation',
