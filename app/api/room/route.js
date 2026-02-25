@@ -82,6 +82,8 @@ function filterForPlayer(room, playerId) {
     currentBidder: room.currentBidder,
     bids: room.bids || [],
     highBid: room.highBid || { seat: -1, amount: 0 },
+    biddingTeam: room.biddingTeam ?? null,
+    bidAmount: room.bidAmount ?? 0,
     bidBubbles: room.bidBubbles || {},
     trickPlays: room.trickPlays || [],
     trickNumber: room.trickNumber || 1,
@@ -135,6 +137,8 @@ function startDealing(room) {
   room.bids = [];
   room.highBid = { seat: -1, amount: 0 };
   room.bidBubbles = {};
+  room.biddingTeam = null;
+  room.bidAmount = 0;
   room.currentBidder = (room.dealer + 1) % 4;
   room.trumpSuit = null;
   room.trickPlays = [];

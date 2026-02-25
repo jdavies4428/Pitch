@@ -206,8 +206,8 @@ export default function Game() {
     setCutCards(state.cutCards || []);
     setCutWinner(state.cutWinner);
     setStatusMsg(state.statusMsg || '');
-    setBiddingTeam(state.highBid?.seat !== undefined ? getTeam(state.highBid.seat) : null);
-    setBidAmount(state.highBid?.amount || 0);
+    setBiddingTeam(state.biddingTeam ?? (state.highBid?.seat !== undefined && state.highBid.seat >= 0 ? getTeam(state.highBid.seat) : null));
+    setBidAmount(state.bidAmount ?? (state.highBid?.amount || 0));
 
     // Set hands for display — only my hand is real, others are faceDown by count
     if (state.myHand) {
