@@ -156,7 +156,8 @@ function startDealing(room) {
 
 function applyBid(room, seat, bidAmount) {
   room.bids.push({ seat, bid: bidAmount });
-  room.bidBubbles[seat] = bidAmount === 0 ? 'PASS' : `BID ${bidAmount}`;
+  const isDealerSteal = seat === room.dealer && bidAmount > 0 && bidAmount === (room.highBid?.amount || 0);
+  room.bidBubbles[seat] = bidAmount === 0 ? 'PASS' : (isDealerSteal ? `STEAL ${bidAmount}` : `BID ${bidAmount}`);
 
   if (bidAmount > 0 && bidAmount >= (room.highBid?.amount || 0)) {
     room.highBid = { seat, amount: bidAmount };

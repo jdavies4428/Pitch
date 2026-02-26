@@ -440,7 +440,8 @@ export default function Game() {
         hands[currentBidder], highBid.amount, isD, allPassed, difficulty
       );
 
-      const bubbleText = result.bid > 0 ? `BID ${result.bid}` : "PASS";
+      const isDealerSteal = isD && result.bid > 0 && result.bid === highBid.amount;
+      const bubbleText = result.bid > 0 ? (isDealerSteal ? `STEAL ${result.bid}` : `BID ${result.bid}`) : "PASS";
       setBidBubbles(prev => ({ ...prev, [currentBidder]: bubbleText }));
 
       let newHigh = highBid;
@@ -620,7 +621,8 @@ export default function Game() {
     }
 
     // Solo mode
-    const bubbleText = amount > 0 ? `BID ${amount}` : "PASS";
+    const isDealerSteal = SOUTH === dealer && amount > 0 && amount === highBid.amount;
+    const bubbleText = amount > 0 ? (isDealerSteal ? `STEAL ${amount}` : `BID ${amount}`) : "PASS";
     setBidBubbles(prev => ({ ...prev, [SOUTH]: bubbleText }));
 
     let newHigh = highBid;
@@ -1638,7 +1640,7 @@ export default function Game() {
                               : '0 0 12px rgba(200,170,80,0.1), inset 0 1px 0 rgba(200,170,80,0.1)',
                             letterSpacing: isPass ? '0.05em' : '0.12em',
                           }}>
-                          {isPass ? 'PASS' : `BID ${b}`}
+                          {isPass ? 'PASS' : (myActualSeat === dealer && b === highBid.amount && highBid.amount > 0 ? `STEAL ${b}` : `BID ${b}`)}
                         </button>
                       );
                     })}
