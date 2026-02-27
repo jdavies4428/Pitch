@@ -1,4 +1,5 @@
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata = {
   title: "Pitch — Four Player Card Game",
@@ -37,7 +38,7 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
-      <body className="bg-[#0a0a1a] overflow-hidden">{children}</body>
+      <body className="bg-[#0a0a1a] overflow-hidden">{children}<Analytics /></body>
     </html>
   );
 }
