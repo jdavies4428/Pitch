@@ -14,6 +14,8 @@ import ScoreBoard from "./ScoreBoard";
 import Confetti from "./Confetti";
 
 const POLL_MS = 700;
+const FAST_POLL_MS = 220;
+const SOLO_FAST_POLL_MS = 140;
 
 const DIFF_LABELS = { easy: "ROOKIE", medium: "STANDARD", hard: "SHARK" };
 const DIFF_COLORS = { easy: "#7a9b8a", medium: "#6b8aad", hard: "#ad6b6b" };
@@ -26,6 +28,13 @@ const PLAYER_INFO = {
   [EAST]:  { name: 'BLITZ', initial: 'B', color: '#ad6b6b' },
 };
 
+const SEAT_META = {
+  [NORTH]: { label: 'NORTH', mini: 'N', position: 'Across', partner: 'Pairs with South' },
+  [WEST]: { label: 'WEST', mini: 'W', position: 'Left', partner: 'Pairs with East' },
+  [EAST]: { label: 'EAST', mini: 'E', position: 'Right', partner: 'Pairs with West' },
+  [SOUTH]: { label: 'SOUTH', mini: 'S', position: 'Dealer side', partner: 'Pairs with North' },
+};
+
 // Display positions
 const DISPLAY_POSITIONS = [SOUTH, WEST, NORTH, EAST];
 
@@ -36,15 +45,152 @@ function getConfiguredHumanSeats(count, mode) {
   return [SOUTH, WEST];
 }
 
-function buildPendingPlayerNames(count, mode, claimedSeat, claimedName) {
-  const names = {};
-  const humanSeats = getConfiguredHumanSeats(count, mode);
-  for (const seat of DISPLAY_POSITIONS) {
-    if (seat === claimedSeat) names[seat] = claimedName;
-    else if (humanSeats.includes(seat)) names[seat] = 'OPEN';
-    else names[seat] = PLAYER_INFO[seat]?.name || 'AI';
+function getSeatHint(seat, count, mode) {
+  if (count === 4) {
+    return getTeam(seat) === TEAM_A ? 'Blue team' : 'Red team';
   }
-  return names;
+  if (count === 2 && mode === 'coop') {
+    return 'Friend team';
+  }
+  if (count === 2 && mode === 'versus') {
+    return getTeam(seat) === TEAM_A ? 'You + AI' : 'Friend + AI';
+  }
+  return SEAT_META[seat].partner;
+}
+
+function SeatPicker({
+  title,
+  subtitle,
+  selectedSeat,
+  onSelect,
+  allowedSeats,
+  occupiedSeats = [],
+  playerNames = {},
+  humanCount,
+  gameMode,
+}) {
+  const layout = {
+    [NORTH]: { top: 0, left: '50%', transform: 'translateX(-50%)' },
+    [WEST]: { left: 0, top: '50%', transform: 'translateY(-50%)' },
+    [EAST]: { right: 0, top: '50%', transform: 'translateY(-50%)' },
+    [SOUTH]: { bottom: 0, left: '50%', transform: 'translateX(-50%)' },
+  };
+
+  return (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: 2, fontWeight: 500 }}>
+        {title}
+      </div>
+      {subtitle && (
+        <div style={{
+          fontSize: 8,
+          color: 'rgba(255,255,255,0.22)',
+          textAlign: 'center',
+          lineHeight: 1.5,
+          maxWidth: 250,
+        }}>
+          {subtitle}
+        </div>
+      )}
+      <div style={{
+        position: 'relative',
+        width: 'min(250px, 100%)',
+        height: 216,
+      }}>
+        <div style={{
+          position: 'absolute',
+          inset: '50px 52px',
+          borderRadius: 24,
+          background: 'radial-gradient(circle at 50% 40%, rgba(200,170,80,0.08), rgba(255,255,255,0.02))',
+          border: '1px solid rgba(255,255,255,0.06)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'rgba(255,255,255,0.16)',
+          letterSpacing: 4,
+          fontSize: 9,
+          fontWeight: 700,
+        }}>
+          TABLE
+        </div>
+
+        {DISPLAY_POSITIONS.map((seat) => {
+          const allowed = allowedSeats.includes(seat);
+          const occupied = occupiedSeats.includes(seat);
+          const selected = selectedSeat === seat;
+          const clickable = allowed && !occupied;
+          const teamColor = getTeam(seat) === TEAM_A ? '#6b8aad' : '#ad6b6b';
+          const label = playerNames[seat] || (allowed ? 'OPEN' : 'AI');
+
+          return (
+            <button
+              key={seat}
+              type="button"
+              disabled={!clickable}
+              onClick={() => clickable && onSelect(seat)}
+              style={{
+                position: 'absolute',
+                width: 88,
+                minHeight: 58,
+                padding: '8px 8px 7px',
+                borderRadius: 14,
+                border: `1px solid ${selected
+                  ? 'rgba(200,170,80,0.42)'
+                  : occupied
+                    ? 'rgba(255,255,255,0.08)'
+                    : allowed
+                      ? `${teamColor}44`
+                      : 'rgba(255,255,255,0.05)'}`,
+                background: selected
+                  ? 'rgba(200,170,80,0.12)'
+                  : occupied
+                    ? 'rgba(255,255,255,0.04)'
+                    : allowed
+                      ? 'rgba(255,255,255,0.03)'
+                      : 'rgba(0,0,0,0.16)',
+                color: occupied ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.82)',
+                cursor: clickable ? 'pointer' : 'default',
+                opacity: allowed ? 1 : 0.48,
+                textAlign: 'center',
+                ...layout[seat],
+              }}
+            >
+              <div style={{
+                fontSize: 8,
+                fontWeight: 700,
+                letterSpacing: 1.8,
+                color: selected ? '#c8aa50' : teamColor,
+                marginBottom: 4,
+              }}>
+                {SEAT_META[seat].label}
+              </div>
+              <div style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                lineHeight: 1.1,
+                marginBottom: 3,
+              }}>
+                {label}
+              </div>
+              <div style={{
+                fontSize: 7,
+                color: selected
+                  ? 'rgba(200,170,80,0.82)'
+                  : occupied
+                    ? 'rgba(255,255,255,0.2)'
+                    : 'rgba(255,255,255,0.24)',
+                letterSpacing: 0.8,
+                lineHeight: 1.2,
+              }}>
+                {occupied ? 'TAKEN' : allowed ? getSeatHint(seat, humanCount, gameMode) : 'AI SEAT'}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function Game() {
@@ -64,7 +210,12 @@ export default function Game() {
   const [lobbyAction, setLobbyAction] = useState(null); // 'hostRoom' | 'joinRoom'
   const [gameMode, setGameMode] = useState('versus'); // 'versus' | 'coop'
   const [humanCount, setHumanCount] = useState(1);
+  const [hostSeatChoice, setHostSeatChoice] = useState(SOUTH);
   const [joinCode, setJoinCode] = useState('');
+  const [joinSeatChoice, setJoinSeatChoice] = useState(null);
+  const [roomPreview, setRoomPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
   const [lobbyError, setLobbyError] = useState('');
   const [waiting, setWaiting] = useState(false);
   const [targetHumans, setTargetHumans] = useState(1);
@@ -144,10 +295,10 @@ export default function Game() {
   // Get player name for a seat
   const getPlayerName = useCallback((seat) => {
     if (onlineNames[seat]) {
-      return seat === mySeat ? 'YOU' : onlineNames[seat];
+      return onlineNames[seat];
     }
     return PLAYER_INFO[seat]?.name || 'Unknown';
-  }, [mySeat, onlineNames]);
+  }, [onlineNames]);
 
   // ── Audio init ──
   const initAudio = useCallback(async () => {
@@ -173,6 +324,63 @@ export default function Game() {
     if (trimmed) sessionStorage.setItem('pitchPlayerName', trimmed);
     else sessionStorage.removeItem('pitchPlayerName');
   }, [playerName]);
+
+  useEffect(() => {
+    const allowedSeats = getConfiguredHumanSeats(humanCount, gameMode);
+    setHostSeatChoice((prev) => (allowedSeats.includes(prev) ? prev : allowedSeats[0]));
+  }, [humanCount, gameMode]);
+
+  useEffect(() => {
+    if (lobbyAction !== 'joinRoom') {
+      setRoomPreview(null);
+      setPreviewLoading(false);
+      setPreviewError('');
+      setJoinSeatChoice(null);
+      return;
+    }
+
+    if (joinCode.length !== 4) {
+      setRoomPreview(null);
+      setPreviewLoading(false);
+      setPreviewError('');
+      setJoinSeatChoice(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      setPreviewLoading(true);
+      try {
+        const preview = await roomApi.preview(joinCode);
+        if (cancelled) return;
+        if (preview.error) {
+          setRoomPreview(null);
+          setPreviewError(preview.error);
+          setJoinSeatChoice(null);
+          return;
+        }
+        setRoomPreview(preview);
+        setPreviewError('');
+        setJoinSeatChoice((prev) => (
+          preview.availableSeats?.includes(prev)
+            ? prev
+            : (preview.availableSeats?.[0] ?? null)
+        ));
+      } catch {
+        if (cancelled) return;
+        setRoomPreview(null);
+        setPreviewError('Failed to load room');
+        setJoinSeatChoice(null);
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [joinCode, lobbyAction]);
 
   // ── Cleanup ──
   useEffect(() => {
@@ -294,6 +502,21 @@ export default function Game() {
     lastStateRef.current = state;
   }, []);
 
+  const applyActionState = useCallback((state) => {
+    if (!state?.error) {
+      applyServerState(state);
+    }
+    return state;
+  }, [applyServerState]);
+
+  const awaitingAutoAdvance = waiting || phase === 'cutForDeal' || phase === 'trickCollect' || phase === 'handOver';
+  const awaitingOtherTurn =
+    (phase === 'bidding' && currentBidder !== null && currentBidder !== mySeat) ||
+    ((phase === 'pitching' || phase === 'trickPlay') && currentPlayer !== null && currentPlayer !== mySeat);
+  const pollMs = targetHumans === 1
+    ? (awaitingAutoAdvance || awaitingOtherTurn ? SOLO_FAST_POLL_MS : FAST_POLL_MS)
+    : (awaitingAutoAdvance || awaitingOtherTurn ? FAST_POLL_MS : POLL_MS);
+
   // Start/stop polling
   useEffect(() => {
     if (mode !== 'online' || !roomCode) return;
@@ -308,9 +531,9 @@ export default function Game() {
     };
 
     poll(); // immediate first poll
-    pollRef.current = setInterval(poll, POLL_MS);
+    pollRef.current = setInterval(poll, pollMs);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [mode, roomCode, playerId, applyServerState]);
+  }, [mode, roomCode, playerId, applyServerState, pollMs]);
 
   // ═══════════════════════════════════════
   // ── LOBBY ACTIONS ──
@@ -324,25 +547,21 @@ export default function Game() {
       return;
     }
     try {
-      const res = await roomApi.create(playerId, trimmedName, difficulty, gameMode, humanCount);
+      const requestedSeat = humanCount === 1 ? SOUTH : hostSeatChoice;
+      const res = await roomApi.create(playerId, trimmedName, difficulty, gameMode, humanCount, requestedSeat);
       if (res.error) {
         setLobbyError(res.error);
         return;
       }
       setRoomCode(res.roomCode);
-      setMySeat(res.mySeat);
-      setOnlineNames(buildPendingPlayerNames(res.targetHumans || humanCount, gameMode, res.mySeat, trimmedName));
-      setTargetHumans(res.targetHumans || humanCount);
-      setJoinedHumans(1);
-      setHumanSeats(getConfiguredHumanSeats(res.targetHumans || humanCount, gameMode));
       setMode('online');
-      setWaiting(Boolean(res.waiting));
       setScreen('playing');
       setRoomUrl(res.roomCode);
+      applyActionState(res);
     } catch (e) {
       setLobbyError('Failed to create room');
     }
-  }, [playerId, playerName, difficulty, gameMode, humanCount, setRoomUrl]);
+  }, [playerId, playerName, difficulty, gameMode, humanCount, hostSeatChoice, setRoomUrl, applyActionState]);
 
   const joinRoom = useCallback(async () => {
     setLobbyError('');
@@ -355,23 +574,25 @@ export default function Game() {
       setLobbyError('Code must be 4 characters');
       return;
     }
+    if (roomPreview?.targetHumans > 1 && joinSeatChoice === null) {
+      setLobbyError('Choose an open seat');
+      return;
+    }
     try {
-      const res = await roomApi.join(joinCode, playerId, trimmedName);
+      const res = await roomApi.join(joinCode, playerId, trimmedName, joinSeatChoice);
       if (res.error) {
         setLobbyError(res.error);
         return;
       }
       setRoomCode(res.roomCode);
-      setMySeat(res.mySeat);
-      setOnlineNames({ [res.mySeat]: trimmedName });
       setMode('online');
-      setWaiting(Boolean(res.waiting));
       setScreen('playing');
       setRoomUrl(res.roomCode);
+      applyActionState(res);
     } catch (e) {
       setLobbyError('Failed to join room');
     }
-  }, [joinCode, playerId, playerName, setRoomUrl]);
+  }, [joinCode, joinSeatChoice, roomPreview, playerId, playerName, setRoomUrl, applyActionState]);
 
   // ── Go to lobby ──
   const goToLobby = useCallback(() => {
@@ -387,6 +608,7 @@ export default function Game() {
     setShowConfetti(false);
     setWaiting(false);
     setHumanCount(1);
+    setHostSeatChoice(SOUTH);
     setGameMode('versus');
     setTargetHumans(1);
     setJoinedHumans(0);
@@ -396,6 +618,10 @@ export default function Game() {
     setCopied(false);
     setLobbyAction(null);
     setJoinCode('');
+    setJoinSeatChoice(null);
+    setRoomPreview(null);
+    setPreviewLoading(false);
+    setPreviewError('');
     setLobbyError('');
     setOnlineNames({});
     lastStateRef.current = null;
@@ -403,22 +629,24 @@ export default function Game() {
   }, [setRoomUrl]);
 
   // ── Human: make bid ──
-  const makeBid = useCallback((amount) => {
+  const makeBid = useCallback(async (amount) => {
     initAudio();
-    roomApi.bid(roomCode, playerId, amount);
-  }, [roomCode, playerId, initAudio]);
+    const state = await roomApi.bid(roomCode, playerId, amount);
+    applyActionState(state);
+  }, [roomCode, playerId, initAudio, applyActionState]);
 
   // ── Human: play card ──
-  const playCard = useCallback((card) => {
+  const playCard = useCallback(async (card) => {
     initAudio();
-    sounds.cardPlay();
-    roomApi.play(roomCode, playerId, card);
-  }, [roomCode, playerId, initAudio]);
+    const state = await roomApi.play(roomCode, playerId, card);
+    applyActionState(state);
+  }, [roomCode, playerId, initAudio, applyActionState]);
 
   // ── Rematch ──
-  const playAgain = useCallback(() => {
-    roomApi.rematch(roomCode, playerId);
-  }, [roomCode, playerId]);
+  const playAgain = useCallback(async () => {
+    const state = await roomApi.rematch(roomCode, playerId);
+    applyActionState(state);
+  }, [roomCode, playerId, applyActionState]);
 
   const copyRoomLink = useCallback(async () => {
     const shareUrl = getShareUrl();
@@ -443,6 +671,16 @@ export default function Game() {
   const waitingPlayers = Math.max(0, targetHumans - joinedHumans);
   const readyHumans = humanSeats.filter(seat => rematchState?.[seat]).length;
   const myRematchReady = !!rematchState?.[mySeat];
+  const hostSelectableSeats = getConfiguredHumanSeats(humanCount, gameMode);
+  const previewHumanSeats = roomPreview?.humanSeats || [];
+  const previewAvailableSeats = roomPreview?.availableSeats || [];
+  const previewOccupiedSeats = previewHumanSeats.filter((seat) => !previewAvailableSeats.includes(seat));
+  const canCreateRoom = !!playerName.trim();
+  const canJoinRoom = !!playerName.trim()
+    && joinCode.length === 4
+    && !!roomPreview
+    && roomPreview.targetHumans > 1
+    && joinSeatChoice !== null;
 
   const ledSuit = trickPlays.length > 0 ? trickPlays[0].card.suit : null;
   const playableCards = lastStateRef.current?.playableCards || [];
@@ -489,8 +727,9 @@ export default function Game() {
       (phase === 'bidding' && currentBidder === svrSeat);
     const leading = isLeading(svrSeat);
     const isD = dealer === svrSeat;
-    const relation = svrSeat === myActualSeat
-      ? null
+    const isMe = svrSeat === myActualSeat;
+    const relation = isMe
+      ? 'YOU'
       : (getTeam(svrSeat) === getTeam(myActualSeat) ? 'ALLY' : 'FOE');
 
     return (
@@ -521,9 +760,13 @@ export default function Game() {
           <span style={{
             fontSize: 'clamp(7px, 1.9vw, 8px)',
             fontWeight: 700,
-            color: relation === 'ALLY' ? '#7a9b8a' : '#ad6b6b',
-            background: relation === 'ALLY' ? 'rgba(122,155,138,0.14)' : 'rgba(173,107,107,0.14)',
-            border: `1px solid ${relation === 'ALLY' ? 'rgba(122,155,138,0.22)' : 'rgba(173,107,107,0.22)'}`,
+            color: relation === 'YOU' ? '#c8aa50' : relation === 'ALLY' ? '#7a9b8a' : '#ad6b6b',
+            background: relation === 'YOU'
+              ? 'rgba(200,170,80,0.14)'
+              : relation === 'ALLY' ? 'rgba(122,155,138,0.14)' : 'rgba(173,107,107,0.14)',
+            border: `1px solid ${relation === 'YOU'
+              ? 'rgba(200,170,80,0.24)'
+              : relation === 'ALLY' ? 'rgba(122,155,138,0.22)' : 'rgba(173,107,107,0.22)'}`,
             borderRadius: 4,
             padding: '1px 5px',
             letterSpacing: 1,
@@ -625,6 +868,9 @@ export default function Game() {
                 <>
                   <button className="btn w-full" onClick={() => {
                     setLobbyError('');
+                    setPreviewError('');
+                    setRoomPreview(null);
+                    setJoinSeatChoice(null);
                     setLobbyAction('hostRoom');
                   }}>
                     OPEN ROOM
@@ -632,6 +878,7 @@ export default function Game() {
 
                   <button className="btn w-full" onClick={() => {
                     setLobbyError('');
+                    setPreviewError('');
                     setLobbyAction('joinRoom');
                   }}>
                     JOIN ROOM
@@ -722,6 +969,19 @@ export default function Game() {
                     {humanCount === 4 && 'FOUR HUMANS. FIXED TEAMS ACROSS THE TABLE'}
                   </div>
 
+                  {humanCount > 1 && (
+                    <SeatPicker
+                      title="YOUR TABLE SEAT"
+                      subtitle="Pick your seat before you share the room. The view still rotates so you always play from the bottom."
+                      selectedSeat={hostSeatChoice}
+                      onSelect={setHostSeatChoice}
+                      allowedSeats={hostSelectableSeats}
+                      humanCount={humanCount}
+                      gameMode={gameMode}
+                      playerNames={{ [hostSeatChoice]: playerName.trim() || 'YOU' }}
+                    />
+                  )}
+
                   <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: 2, fontWeight: 500 }}>
                     AI DIFFICULTY
                   </div>
@@ -743,15 +1003,19 @@ export default function Game() {
 
                   <button className="btn w-full" onClick={createRoom}
                     style={{
-                      color: playerName.trim() ? '#c8aa50' : 'rgba(255,255,255,0.15)',
-                      borderColor: playerName.trim() ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                      color: canCreateRoom ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: canCreateRoom ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
                     }}>
                     {humanCount === 1 ? 'START 1P ROOM' : `OPEN ${humanCount}P ROOM`}
                   </button>
                   {lobbyError && (
                     <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
                   )}
-                  <button className="btn btn-sm" onClick={() => { setLobbyAction(null); setLobbyError(''); }}
+                  <button className="btn btn-sm" onClick={() => {
+                    setLobbyAction(null);
+                    setLobbyError('');
+                    setPreviewError('');
+                  }}
                     style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
                     BACK
                   </button>
@@ -800,17 +1064,79 @@ export default function Game() {
                     onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
                     onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
                   />
+
+                  {previewLoading && (
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)' }}>
+                      Loading room...
+                    </div>
+                  )}
+
+                  {!previewLoading && previewError && joinCode.length === 4 && (
+                    <div style={{ color: '#ad6b6b', fontSize: 11 }}>{previewError}</div>
+                  )}
+
+                  {!previewLoading && roomPreview && (
+                    <>
+                      <div style={{
+                        fontSize: 8,
+                        color: 'rgba(255,255,255,0.22)',
+                        textAlign: 'center',
+                        lineHeight: 1.5,
+                        marginTop: -4,
+                      }}>
+                        {roomPreview.targetHumans === 2 && (
+                          roomPreview.gameMode === 'coop'
+                            ? '2P CO-OP ROOM'
+                            : '2P VERSUS ROOM'
+                        )}
+                        {roomPreview.targetHumans === 4 && '4P TEAM ROOM'}
+                        {roomPreview.targetHumans === 1 && '1P ROOM'}
+                      </div>
+
+                      {roomPreview.targetHumans > 1 && (
+                        <SeatPicker
+                          title="CHOOSE AN OPEN SEAT"
+                          subtitle="Taken seats show who is already in the room. Your screen still rotates after you join."
+                          selectedSeat={joinSeatChoice}
+                          onSelect={setJoinSeatChoice}
+                          allowedSeats={previewHumanSeats}
+                          occupiedSeats={previewOccupiedSeats}
+                          playerNames={roomPreview.playerNames || {}}
+                          humanCount={roomPreview.targetHumans}
+                          gameMode={roomPreview.gameMode}
+                        />
+                      )}
+
+                      {roomPreview.targetHumans === 1 && (
+                        <div style={{
+                          fontSize: 10,
+                          color: 'rgba(255,255,255,0.22)',
+                          textAlign: 'center',
+                          lineHeight: 1.5,
+                        }}>
+                          Solo rooms start immediately and cannot be joined.
+                        </div>
+                      )}
+                    </>
+                  )}
+
                   <button className="btn w-full" onClick={joinRoom}
                     style={{
-                      color: playerName.trim() && joinCode.length === 4 ? '#c8aa50' : 'rgba(255,255,255,0.15)',
-                      borderColor: playerName.trim() && joinCode.length === 4 ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                      color: canJoinRoom ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: canJoinRoom ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
                     }}>
                     JOIN ROOM
                   </button>
                   {lobbyError && (
                     <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
                   )}
-                  <button className="btn btn-sm" onClick={() => { setLobbyAction(null); setLobbyError(''); }}
+                  <button className="btn btn-sm" onClick={() => {
+                    setLobbyAction(null);
+                    setLobbyError('');
+                    setPreviewError('');
+                    setRoomPreview(null);
+                    setJoinSeatChoice(null);
+                  }}
                     style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
                     BACK
                   </button>
@@ -953,7 +1279,7 @@ export default function Game() {
                         letterSpacing: 2,
                         marginBottom: 3,
                       }}>
-                        {seat === mySeat ? 'YOU' : `SEAT ${seat + 1}`}
+                        {seat === mySeat ? 'YOU' : SEAT_META[seat].label}
                       </div>
                       <div style={{
                         fontSize: 11,
@@ -961,7 +1287,7 @@ export default function Game() {
                         color: filled ? '#c8aa50' : 'rgba(255,255,255,0.28)',
                         letterSpacing: 1,
                       }}>
-                        {seat === mySeat ? 'READY' : getPlayerName(seat)}
+                        {getPlayerName(seat)}
                       </div>
                     </div>
                   );

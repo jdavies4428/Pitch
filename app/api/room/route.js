@@ -9,8 +9,11 @@ import {
 import { getAiBid, getAiPlay, getAiTrumpCard } from '@/lib/ai';
 
 const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const AI_DELAY = 800; // ms between AI actions
-const PHASE_DELAY = 1500; // ms for phase transitions (trick collect, etc.)
+const DEFAULT_AI_DELAY = 800; // ms between AI actions
+const DEFAULT_PHASE_DELAY = 1500; // ms for phase transitions (trick collect, etc.)
+const SOLO_PITCH_DELAY = 600;
+const SOLO_PLAY_DELAY = 700;
+const SOLO_PHASE_DELAY = 1400;
 const ALL_SEATS = [SOUTH, WEST, NORTH, EAST];
 const HUMAN_COUNTS = new Set([1, 2, 4]);
 const AI_NAMES = {
@@ -73,6 +76,10 @@ function getOpenHumanSeat(room) {
   return room.humanSeats.find(seat => !room.participantsBySeat?.[seat]) ?? null;
 }
 
+function getAvailableHumanSeats(room) {
+  return room.humanSeats.filter(seat => !room.participantsBySeat?.[seat]);
+}
+
 function isAiSeat(room, seat) {
   return !room.humanSeats.includes(seat);
 }
@@ -88,6 +95,35 @@ function markWaiting(room) {
   room.phase = 'waiting';
   room.statusMsg = `Waiting for ${getWaitingCount(room)} more player${getWaitingCount(room) === 1 ? '' : 's'}`;
   room.lastActionAt = Date.now();
+}
+
+function publicRoomInfo(room) {
+  syncPlayerNames(room);
+  return {
+    roomCode: room.roomCode,
+    gameMode: room.gameMode,
+    targetHumans: room.targetHumans,
+    humanSeats: room.humanSeats,
+    availableSeats: getAvailableHumanSeats(room),
+    playerNames: room.playerNames || {},
+    waiting: room.phase === 'waiting' || getWaitingCount(room) > 0,
+  };
+}
+
+function getBidDelay() {
+  return DEFAULT_AI_DELAY;
+}
+
+function getPitchDelay(room) {
+  return room.targetHumans === 1 ? SOLO_PITCH_DELAY : DEFAULT_AI_DELAY;
+}
+
+function getPlayDelay(room) {
+  return room.targetHumans === 1 ? SOLO_PLAY_DELAY : DEFAULT_AI_DELAY;
+}
+
+function getPhaseDelay(room) {
+  return room.targetHumans === 1 ? SOLO_PHASE_DELAY : DEFAULT_PHASE_DELAY;
 }
 
 // Filter game state so a player only sees their own hand.
@@ -311,7 +347,7 @@ function processAiTick(room) {
     return true;
   }
 
-  if (room.phase === 'trickCollect' && elapsed >= PHASE_DELAY) {
+  if (room.phase === 'trickCollect' && elapsed >= getPhaseDelay(room)) {
     advanceAfterTrickCollect(room);
     return true;
   }
@@ -321,7 +357,7 @@ function processAiTick(room) {
     return true;
   }
 
-  if (room.phase === 'bidding' && isAiSeat(room, room.currentBidder) && elapsed >= AI_DELAY) {
+  if (room.phase === 'bidding' && isAiSeat(room, room.currentBidder) && elapsed >= getBidDelay(room)) {
     const seat = room.currentBidder;
     const hand = room.hands[seat];
     const allPassedToDealer = room.bids.length === 3 && (room.highBid?.amount || 0) === 0;
@@ -337,7 +373,7 @@ function processAiTick(room) {
     return true;
   }
 
-  if (room.phase === 'pitching' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === 'pitching' && isAiSeat(room, room.currentPlayer) && elapsed >= getPitchDelay(room)) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const preferredSuit = room.aiPreferredSuit?.[seat] || hand[0]?.suit;
@@ -346,7 +382,7 @@ function processAiTick(room) {
     return true;
   }
 
-  if (room.phase === 'trickPlay' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
+  if (room.phase === 'trickPlay' && isAiSeat(room, room.currentPlayer) && elapsed >= getPlayDelay(room)) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
     const card = getAiPlay(
@@ -400,6 +436,7 @@ export async function POST(request) {
       difficulty,
       gameMode,
       humanCount,
+      requestedSeat,
     } = body;
 
     const targetHumans = Number(humanCount || 2);
@@ -430,6 +467,14 @@ export async function POST(request) {
 
     const normalizedGameMode = normalizeGameMode(targetHumans, gameMode);
     const humanSeats = getHumanSeatPlan(targetHumans, normalizedGameMode);
+    const preferredSeat = requestedSeat === undefined || requestedSeat === null
+      ? humanSeats[0]
+      : Number(requestedSeat);
+
+    if (!humanSeats.includes(preferredSeat)) {
+      return NextResponse.json({ error: 'Invalid seat selection' }, { status: 400 });
+    }
+
     const room = {
       roomCode: code,
       gameMode: normalizedGameMode,
@@ -437,7 +482,7 @@ export async function POST(request) {
       humanSeats,
       hostId: playerId,
       participantsBySeat: {
-        [humanSeats[0]]: { id: playerId, name: trimmedName },
+        [preferredSeat]: { id: playerId, name: trimmedName },
       },
       dealer: SOUTH,
       phase: 'waiting',
@@ -479,16 +524,22 @@ export async function POST(request) {
     }
 
     await setRoom(code, room);
-    return NextResponse.json({
-      roomCode: code,
-      mySeat: humanSeats[0],
-      waiting: targetHumans > 1,
-      targetHumans,
-    });
+    return NextResponse.json(filterForPlayer(room, playerId));
+  }
+
+  if (action === 'preview') {
+    const { code } = body;
+    const room = await getRoom(code);
+
+    if (!room) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    }
+
+    return NextResponse.json(publicRoomInfo(room));
   }
 
   if (action === 'join') {
-    const { code, playerId, playerName } = body;
+    const { code, playerId, playerName, requestedSeat } = body;
     const room = await getRoom(code);
 
     if (!room) {
@@ -502,12 +553,25 @@ export async function POST(request) {
 
     const existingSeat = getPlayerSeat(room, playerId);
     if (existingSeat !== null) {
-      return NextResponse.json({ roomCode: code, mySeat: existingSeat, waiting: room.phase === 'waiting' });
+      return NextResponse.json(filterForPlayer(room, playerId));
     }
 
-    const openSeat = getOpenHumanSeat(room);
+    const preferredSeat = requestedSeat === undefined || requestedSeat === null
+      ? null
+      : Number(requestedSeat);
+
+    if (preferredSeat !== null && !room.humanSeats.includes(preferredSeat)) {
+      return NextResponse.json({ error: 'Invalid seat selection' }, { status: 400 });
+    }
+
+    const openSeat = preferredSeat !== null
+      ? (room.participantsBySeat?.[preferredSeat] ? null : preferredSeat)
+      : getOpenHumanSeat(room);
+
     if (openSeat === null) {
-      return NextResponse.json({ error: 'Room is full' }, { status: 400 });
+      return NextResponse.json({
+        error: preferredSeat !== null ? 'That seat is already taken' : 'Room is full',
+      }, { status: 400 });
     }
 
     room.participantsBySeat[openSeat] = { id: playerId, name: trimmedName };
@@ -521,7 +585,7 @@ export async function POST(request) {
     }
 
     await setRoom(code, room);
-    return NextResponse.json({ roomCode: code, mySeat: openSeat, waiting: room.phase === 'waiting' });
+    return NextResponse.json(filterForPlayer(room, playerId));
   }
 
   if (action === 'bid') {
@@ -542,7 +606,7 @@ export async function POST(request) {
 
     applyBid(room, seat, bid);
     await setRoom(code, room);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(filterForPlayer(room, playerId));
   }
 
   if (action === 'play') {
@@ -572,7 +636,7 @@ export async function POST(request) {
     }
 
     await setRoom(code, room);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(filterForPlayer(room, playerId));
   }
 
   if (action === 'rematch') {
@@ -600,7 +664,7 @@ export async function POST(request) {
     }
 
     await setRoom(code, room);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(filterForPlayer(room, playerId));
   }
 
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
