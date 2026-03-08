@@ -3,12 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   SOUTH, WEST, NORTH, EAST, TEAM_A, TEAM_B,
-  getTeam, SUITS, SUIT_SYMBOLS, WIN_SCORE, isRedSuit,
-  dealHands, getValidBids, getPlayableCards, evaluateTrick,
-  scoreHand, updateScores, nextDealer, cardEquals, cardId,
-  getLivePoints, cardDisplay, createDeck, shuffleDeck,
+  getTeam, SUIT_SYMBOLS, WIN_SCORE,
+  cardDisplay, isDealerStealBid,
 } from "@/lib/game";
-import { getAiBid, getAiPlay, getAiTrumpCard } from "@/lib/ai";
 import { roomApi } from "@/lib/api-client";
 import { sounds } from "@/lib/sounds";
 import Hand from "./Hand";
@@ -16,20 +13,12 @@ import TrickArea from "./TrickArea";
 import ScoreBoard from "./ScoreBoard";
 import Confetti from "./Confetti";
 
-const AI_DELAY = 700;
-const AI_BID_DELAY = 1400;
-const TRICK_PAUSE = 1400;
 const POLL_MS = 700;
 
 const DIFF_LABELS = { easy: "ROOKIE", medium: "STANDARD", hard: "SHARK" };
 const DIFF_COLORS = { easy: "#7a9b8a", medium: "#6b8aad", hard: "#ad6b6b" };
-const DIFF_DESC = {
-  easy: "Still learning the ropes",
-  medium: "Knows when to hold 'em",
-  hard: "Reads you like a book",
-};
 
-// Player info (solo mode defaults)
+// Player info defaults
 const PLAYER_INFO = {
   [SOUTH]: { name: 'YOU',   initial: 'Y', color: '#6b8aad' },
   [NORTH]: { name: 'ACE',   initial: 'A', color: '#6b8aad' },
@@ -40,9 +29,27 @@ const PLAYER_INFO = {
 // Display positions
 const DISPLAY_POSITIONS = [SOUTH, WEST, NORTH, EAST];
 
+function getConfiguredHumanSeats(count, mode) {
+  if (count === 1) return [SOUTH];
+  if (count === 2) return mode === 'coop' ? [SOUTH, NORTH] : [SOUTH, WEST];
+  if (count === 4) return [SOUTH, WEST, NORTH, EAST];
+  return [SOUTH, WEST];
+}
+
+function buildPendingPlayerNames(count, mode, claimedSeat, claimedName) {
+  const names = {};
+  const humanSeats = getConfiguredHumanSeats(count, mode);
+  for (const seat of DISPLAY_POSITIONS) {
+    if (seat === claimedSeat) names[seat] = claimedName;
+    else if (humanSeats.includes(seat)) names[seat] = 'OPEN';
+    else names[seat] = PLAYER_INFO[seat]?.name || 'AI';
+  }
+  return names;
+}
+
 export default function Game() {
   // ── Mode ──
-  const [mode, setMode] = useState(null); // null | 'solo' | 'online'
+  const [mode, setMode] = useState(null); // null | 'online'
   const [roomCode, setRoomCode] = useState(null);
   const [playerId] = useState(() =>
     typeof window !== 'undefined' ? (sessionStorage.getItem('pitchPlayerId') || (() => {
@@ -54,12 +61,16 @@ export default function Game() {
   const [playerName, setPlayerName] = useState('');
   const [mySeat, setMySeat] = useState(SOUTH);
   const [onlineNames, setOnlineNames] = useState({}); // { [seat]: name }
-  const [lobbyAction, setLobbyAction] = useState(null); // 'create' | 'join'
+  const [lobbyAction, setLobbyAction] = useState(null); // 'hostRoom' | 'joinRoom'
   const [gameMode, setGameMode] = useState('versus'); // 'versus' | 'coop'
+  const [humanCount, setHumanCount] = useState(1);
   const [joinCode, setJoinCode] = useState('');
   const [lobbyError, setLobbyError] = useState('');
   const [waiting, setWaiting] = useState(false);
-  const [rematchState, setRematchState] = useState({ p1: false, p2: false });
+  const [targetHumans, setTargetHumans] = useState(1);
+  const [joinedHumans, setJoinedHumans] = useState(0);
+  const [humanSeats, setHumanSeats] = useState(getConfiguredHumanSeats(1, 'versus'));
+  const [rematchState, setRematchState] = useState({});
   const [copied, setCopied] = useState(false);
 
   // ── Screen ──
@@ -68,7 +79,6 @@ export default function Game() {
 
   // ── Game state ──
   const [dealer, setDealer] = useState(EAST);
-  const [originalHands, setOriginalHands] = useState([[], [], [], []]);
   const [hands, setHands] = useState([[], [], [], []]);
   const [scores, setScores] = useState({ [TEAM_A]: 0, [TEAM_B]: 0 });
   const [handNumber, setHandNumber] = useState(1);
@@ -87,7 +97,6 @@ export default function Game() {
   const [currentPlayer, setCurrentPlayer] = useState(null);
   const [trickPlays, setTrickPlays] = useState([]);
   const [trickNumber, setTrickNumber] = useState(1);
-  const [capturedTricks, setCapturedTricks] = useState([]);
   const [trickWinner, setTrickWinner] = useState(null);
 
   // ── Results ──
@@ -104,28 +113,41 @@ export default function Game() {
   // ── UI ──
   const [audioReady, setAudioReady] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
-  const timerRef = useRef(null);
+  const [onlineLivePoints, setOnlineLivePoints] = useState(null);
   const pollRef = useRef(null);
   const lastStateRef = useRef(null); // Track previous poll state for sound triggers
 
-  // ── Seat rotation for multiplayer ──
+  const setRoomUrl = useCallback((code) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (code) url.searchParams.set('room', code);
+    else url.searchParams.delete('room');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+  }, []);
+
+  const getShareUrl = useCallback((code = roomCode) => {
+    if (typeof window === 'undefined' || !code) return '';
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', code);
+    return url.toString();
+  }, [roomCode]);
+
+  // ── Seat rotation for room play ──
   const displaySeat = useCallback((serverSeat) => {
-    if (mode !== 'online') return serverSeat;
     return (serverSeat - mySeat + 4) % 4;
-  }, [mode, mySeat]);
+  }, [mySeat]);
 
   const serverSeat = useCallback((displayPos) => {
-    if (mode !== 'online') return displayPos;
     return (displayPos + mySeat) % 4;
-  }, [mode, mySeat]);
+  }, [mySeat]);
 
   // Get player name for a seat
   const getPlayerName = useCallback((seat) => {
-    if (mode === 'online' && onlineNames[seat]) {
+    if (onlineNames[seat]) {
       return seat === mySeat ? 'YOU' : onlineNames[seat];
     }
     return PLAYER_INFO[seat]?.name || 'Unknown';
-  }, [mode, mySeat, onlineNames]);
+  }, [mySeat, onlineNames]);
 
   // ── Audio init ──
   const initAudio = useCallback(async () => {
@@ -133,10 +155,28 @@ export default function Game() {
     if (!audioReady) setAudioReady(true);
   }, [audioReady]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const savedName = sessionStorage.getItem('pitchPlayerName');
+    if (savedName) setPlayerName(savedName);
+
+    const invitedCode = new URLSearchParams(window.location.search).get('room');
+    if (invitedCode) {
+      setJoinCode(invitedCode.toUpperCase().slice(0, 4));
+      setLobbyAction('joinRoom');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const trimmed = playerName.trim();
+    if (trimmed) sessionStorage.setItem('pitchPlayerName', trimmed);
+    else sessionStorage.removeItem('pitchPlayerName');
+  }, [playerName]);
+
   // ── Cleanup ──
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
@@ -152,10 +192,15 @@ export default function Game() {
     setMySeat(state.mySeat);
     setWaiting(state.waiting);
     setOnlineNames(state.playerNames || {});
-    setRematchState(state.rematch || { p1: false, p2: false });
+    setRematchState(state.rematch || {});
+    setTargetHumans(state.targetHumans || 2);
+    setJoinedHumans(state.joinedHumans || 0);
+    setHumanSeats(state.humanSeats || getConfiguredHumanSeats(2, 'versus'));
+    setGameMode(state.gameMode || 'versus');
 
     if (state.waiting) {
       setScreen('playing'); // show "waiting" overlay
+      lastStateRef.current = state;
       return;
     }
 
@@ -207,6 +252,7 @@ export default function Game() {
     setCutCards(state.cutCards || []);
     setCutWinner(state.cutWinner);
     setStatusMsg(state.statusMsg || '');
+    setOnlineLivePoints(state.livePoints || null);
     setBiddingTeam(state.biddingTeam ?? (state.highBid?.seat !== undefined && state.highBid.seat >= 0 ? getTeam(state.highBid.seat) : null));
     setBidAmount(state.bidAmount ?? (state.highBid?.amount || 0));
 
@@ -272,50 +318,63 @@ export default function Game() {
 
   const createRoom = useCallback(async () => {
     setLobbyError('');
+    const trimmedName = playerName.trim();
+    if (!trimmedName) {
+      setLobbyError('Enter your name');
+      return;
+    }
     try {
-      const res = await roomApi.create(playerId, playerName, difficulty, gameMode);
+      const res = await roomApi.create(playerId, trimmedName, difficulty, gameMode, humanCount);
       if (res.error) {
         setLobbyError(res.error);
         return;
       }
       setRoomCode(res.roomCode);
       setMySeat(res.mySeat);
+      setOnlineNames(buildPendingPlayerNames(res.targetHumans || humanCount, gameMode, res.mySeat, trimmedName));
+      setTargetHumans(res.targetHumans || humanCount);
+      setJoinedHumans(1);
+      setHumanSeats(getConfiguredHumanSeats(res.targetHumans || humanCount, gameMode));
       setMode('online');
-      setWaiting(true);
+      setWaiting(Boolean(res.waiting));
       setScreen('playing');
+      setRoomUrl(res.roomCode);
     } catch (e) {
       setLobbyError('Failed to create room');
     }
-  }, [playerId, playerName, difficulty, gameMode]);
+  }, [playerId, playerName, difficulty, gameMode, humanCount, setRoomUrl]);
 
   const joinRoom = useCallback(async () => {
     setLobbyError('');
+    const trimmedName = playerName.trim();
+    if (!trimmedName) {
+      setLobbyError('Enter your name');
+      return;
+    }
     if (joinCode.length !== 4) {
       setLobbyError('Code must be 4 characters');
       return;
     }
     try {
-      const res = await roomApi.join(joinCode, playerId, playerName);
+      const res = await roomApi.join(joinCode, playerId, trimmedName);
       if (res.error) {
         setLobbyError(res.error);
         return;
       }
       setRoomCode(res.roomCode);
       setMySeat(res.mySeat);
+      setOnlineNames({ [res.mySeat]: trimmedName });
       setMode('online');
+      setWaiting(Boolean(res.waiting));
       setScreen('playing');
+      setRoomUrl(res.roomCode);
     } catch (e) {
       setLobbyError('Failed to join room');
     }
-  }, [joinCode, playerId, playerName]);
-
-  // ═══════════════════════════════════════
-  // ── SOLO MODE (existing logic, unchanged) ──
-  // ═══════════════════════════════════════
+  }, [joinCode, playerId, playerName, setRoomUrl]);
 
   // ── Go to lobby ──
   const goToLobby = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
     if (pollRef.current) clearInterval(pollRef.current);
     setMode(null);
     setRoomCode(null);
@@ -327,420 +386,74 @@ export default function Game() {
     setGameWinner(null);
     setShowConfetti(false);
     setWaiting(false);
+    setHumanCount(1);
+    setGameMode('versus');
+    setTargetHumans(1);
+    setJoinedHumans(0);
+    setHumanSeats(getConfiguredHumanSeats(1, 'versus'));
+    setRematchState({});
+    setOnlineLivePoints(null);
+    setCopied(false);
     setLobbyAction(null);
     setJoinCode('');
     setLobbyError('');
     setOnlineNames({});
     lastStateRef.current = null;
-  }, []);
-
-  // ── Start solo game ──
-  const startGame = useCallback((diff) => {
-    setMode('solo');
-    setDifficulty(diff);
-    setMySeat(SOUTH);
-    setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
-    setHandNumber(1);
-    setGameWinner(null);
-    setHands([[], [], [], []]);
-    setScreen("playing");
-    setPhase("cutForDeal");
-  }, []);
-
-  // ── CUT FOR DEAL (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || phase !== "cutForDeal") return;
-
-    const deck = shuffleDeck(createDeck());
-    const order = [SOUTH, WEST, NORTH, EAST];
-    const cards = order.map((seat, i) => ({ player: seat, card: deck[i] }));
-
-    const suitRank = { S: 3, H: 2, D: 1, C: 0 };
-    const winner = cards.reduce((best, curr) => {
-      if (curr.card.rank > best.card.rank) return curr;
-      if (curr.card.rank === best.card.rank &&
-          suitRank[curr.card.suit] > suitRank[best.card.suit]) return curr;
-      return best;
-    });
-
-    setStatusMsg("Cutting for deal...");
-    setCutCards([]);
-    setCutWinner(null);
-
-    const timeouts = [];
-
-    cards.forEach((c, i) => {
-      timeouts.push(setTimeout(() => {
-        setCutCards(prev => [...prev, c]);
-        sounds.cardPlay();
-      }, 600 + i * 450));
-    });
-
-    timeouts.push(setTimeout(() => {
-      setCutWinner(winner.player);
-      setStatusMsg(`${PLAYER_INFO[winner.player].name} deals first`);
-      sounds.trickWon();
-    }, 600 + 4 * 450 + 400));
-
-    timeouts.push(setTimeout(() => {
-      setDealer(winner.player);
-      setCutCards([]);
-      setCutWinner(null);
-      setPhase("dealing");
-    }, 600 + 4 * 450 + 400 + 2000));
-
-    return () => timeouts.forEach(t => clearTimeout(t));
-  }, [mode, phase]);
-
-  // ── DEALING (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || screen !== "playing" || phase !== "dealing") return;
-
-    const dealt = dealHands(dealer);
-    setOriginalHands(dealt.map(h => [...h]));
-    setHands(dealt.map(h => [...h]));
-    setCapturedTricks([]);
-    setTrickPlays([]);
-    setTrickNumber(1);
-    setTrumpSuit(null);
-    setBids([]);
-    setHighBid({ seat: null, amount: 0 });
-    setBidBubbles({});
-    setTrickWinner(null);
-    setHandResult(null);
-    setWasSet(false);
-    setStatusMsg("Dealing...");
-
-    sounds.shuffle();
-
-    timerRef.current = setTimeout(() => {
-      const first = (dealer + 1) % 4;
-      setCurrentBidder(first);
-      setPhase("bidding");
-      if (first === SOUTH) {
-        setStatusMsg("Your bid");
-        sounds.turn();
-      } else {
-        setStatusMsg(`${getPlayerName(first)} is bidding...`);
-      }
-    }, 800);
-
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, screen, phase, dealer, getPlayerName]);
-
-  // ── BIDDING AI (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || phase !== "bidding" || currentBidder === null || currentBidder === SOUTH) return;
-    if (bids.length >= 4) return;
-
-    timerRef.current = setTimeout(() => {
-      const isD = currentBidder === dealer;
-      const allPassed = bids.length === 3 && bids.every(b => b.bid === 0);
-      const result = getAiBid(
-        hands[currentBidder], highBid.amount, isD, allPassed, difficulty
-      );
-
-      const isDealerSteal = isD && result.bid > 0 && result.bid === highBid.amount;
-      const bubbleText = result.bid > 0 ? (isDealerSteal ? `STEAL ${result.bid}` : `BID ${result.bid}`) : "PASS";
-      setBidBubbles(prev => ({ ...prev, [currentBidder]: bubbleText }));
-
-      let newHigh = highBid;
-      if (result.bid > 0) {
-        sounds.bidMade();
-        newHigh = { seat: currentBidder, amount: result.bid };
-        setHighBid(newHigh);
-      } else {
-        sounds.bidPass();
-      }
-
-      const newBids = [...bids, { seat: currentBidder, bid: result.bid }];
-      setBids(newBids);
-
-      if (newBids.length >= 4) {
-        const winBid = newHigh;
-        setBiddingTeam(getTeam(winBid.seat));
-        setBidAmount(winBid.amount);
-        setCurrentPlayer(winBid.seat);
-        setPhase("pitching");
-        if (winBid.seat === SOUTH) {
-          setStatusMsg("Pick your trump \u2014 play a card!");
-          sounds.turn();
-        }
-      } else {
-        const next = (currentBidder + 1) % 4;
-        setCurrentBidder(next);
-        if (next === SOUTH) {
-          setStatusMsg("Your bid");
-          sounds.turn();
-        } else {
-          setStatusMsg(`${getPlayerName(next)} is bidding...`);
-        }
-      }
-    }, AI_BID_DELAY);
-
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, phase, currentBidder, bids, highBid, dealer, difficulty, hands]);
-
-  // ── AI PITCHING (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || phase !== "pitching" || currentPlayer === null || currentPlayer === SOUTH) return;
-
-    timerRef.current = setTimeout(() => {
-      const preferred = getAiBid(hands[currentPlayer], 0, false, false, difficulty).preferredSuit;
-      const trumpCard = getAiTrumpCard(hands[currentPlayer], preferred);
-      setTrumpSuit(trumpCard.suit);
-      setTrickPlays([{ player: currentPlayer, card: trumpCard }]);
-      setHands(prev => {
-        const next = prev.map(h => [...h]);
-        next[currentPlayer] = next[currentPlayer].filter(c => !cardEquals(c, trumpCard));
-        return next;
-      });
-      const np = (currentPlayer + 1) % 4;
-      setCurrentPlayer(np);
-      setPhase("trickPlay");
-      sounds.cardPlay();
-      if (np === SOUTH) {
-        setStatusMsg("Your turn");
-        sounds.turn();
-      } else {
-        setStatusMsg(`${getPlayerName(np)} is playing...`);
-      }
-    }, 600);
-
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, phase, currentPlayer, hands, difficulty]);
-
-  // ── TRICK PLAY AI (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || phase !== "trickPlay" || currentPlayer === null || currentPlayer === SOUTH) return;
-    if (trickPlays.length >= 4) return;
-
-    timerRef.current = setTimeout(() => {
-      const card = getAiPlay(
-        hands[currentPlayer], trumpSuit, trickPlays, currentPlayer, capturedTricks, difficulty
-      );
-
-      sounds.cardPlay();
-
-      const newPlays = [...trickPlays, { player: currentPlayer, card }];
-      setTrickPlays(newPlays);
-      setHands(prev => {
-        const next = prev.map(h => [...h]);
-        next[currentPlayer] = next[currentPlayer].filter(c => !cardEquals(c, card));
-        return next;
-      });
-
-      if (newPlays.length >= 4) {
-        setPhase("trickCollect");
-      } else {
-        const np = (currentPlayer + 1) % 4;
-        setCurrentPlayer(np);
-        if (np === SOUTH) {
-          setStatusMsg("Your turn");
-          sounds.turn();
-        } else {
-          setStatusMsg(`${getPlayerName(np)} is playing...`);
-        }
-      }
-    }, AI_DELAY);
-
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, phase, currentPlayer, trickPlays, trumpSuit, capturedTricks, difficulty, hands]);
-
-  // ── TRICK COLLECT (solo) ──
-  useEffect(() => {
-    if (mode !== 'solo' || phase !== "trickCollect") return;
-    if (trickPlays.length < 4) return;
-
-    const winner = evaluateTrick(trickPlays, trumpSuit);
-    setTrickWinner(winner);
-    setStatusMsg(`${getPlayerName(winner)} wins the trick!`);
-    sounds.trickWon();
-
-    timerRef.current = setTimeout(() => {
-      const completedTrick = { winner, cards: [...trickPlays] };
-      const newCaptured = [...capturedTricks, completedTrick];
-      setCapturedTricks(newCaptured);
-      setTrickPlays([]);
-      setTrickWinner(null);
-
-      if (trickNumber >= 6) {
-        const result = scoreHand(originalHands, newCaptured, trumpSuit);
-        const { newScores, wasSet: ws, gameWinner: gw } = updateScores(
-          scores, biddingTeam, bidAmount, result
-        );
-
-        setHandResult(result);
-        setWasSet(ws);
-        setScores(newScores);
-
-        if (ws) {
-          sounds.setBack();
-        } else {
-          sounds.madeIt();
-          setShowMiniConfetti(true);
-          setTimeout(() => setShowMiniConfetti(false), 2500);
-        }
-
-        if (gw !== null) {
-          setGameWinner(gw);
-          if (gw === TEAM_A) {
-            sounds.win();
-            setShowConfetti(true);
-            setTimeout(() => setShowConfetti(false), 4000);
-          } else {
-            sounds.lose();
-          }
-          setScreen("gameOver");
-        } else {
-          setScreen("handOver");
-        }
-      } else {
-        setTrickNumber(prev => prev + 1);
-        setCurrentPlayer(winner);
-        setPhase("trickPlay");
-        if (winner === SOUTH) {
-          setStatusMsg("Your lead");
-          sounds.turn();
-        } else {
-          setStatusMsg(`${getPlayerName(winner)} leads...`);
-        }
-      }
-    }, TRICK_PAUSE);
-
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [mode, phase, trickPlays, trumpSuit, trickNumber, capturedTricks, originalHands, scores, biddingTeam, bidAmount]);
+    setRoomUrl(null);
+  }, [setRoomUrl]);
 
   // ── Human: make bid ──
   const makeBid = useCallback((amount) => {
     initAudio();
-
-    if (mode === 'online') {
-      roomApi.bid(roomCode, playerId, amount);
-      return;
-    }
-
-    // Solo mode
-    const isDealerSteal = SOUTH === dealer && amount > 0 && amount === highBid.amount;
-    const bubbleText = amount > 0 ? (isDealerSteal ? `STEAL ${amount}` : `BID ${amount}`) : "PASS";
-    setBidBubbles(prev => ({ ...prev, [SOUTH]: bubbleText }));
-
-    let newHigh = highBid;
-    if (amount > 0) {
-      sounds.bidMade();
-      newHigh = { seat: SOUTH, amount };
-      setHighBid(newHigh);
-    } else {
-      sounds.bidPass();
-    }
-
-    const newBids = [...bids, { seat: SOUTH, bid: amount }];
-    setBids(newBids);
-
-    if (newBids.length >= 4) {
-      const winBid = newHigh;
-      setBiddingTeam(getTeam(winBid.seat));
-      setBidAmount(winBid.amount);
-      setCurrentPlayer(winBid.seat);
-      setPhase("pitching");
-      if (winBid.seat === SOUTH) {
-        setStatusMsg("Pick your trump \u2014 play a card!");
-      }
-    } else {
-      const next = (SOUTH + 1) % 4;
-      setCurrentBidder(next);
-      setStatusMsg(`${getPlayerName(next)} is bidding...`);
-    }
-  }, [mode, roomCode, playerId, bids, highBid, initAudio, getPlayerName]);
+    roomApi.bid(roomCode, playerId, amount);
+  }, [roomCode, playerId, initAudio]);
 
   // ── Human: play card ──
   const playCard = useCallback((card) => {
     initAudio();
     sounds.cardPlay();
+    roomApi.play(roomCode, playerId, card);
+  }, [roomCode, playerId, initAudio]);
 
-    if (mode === 'online') {
-      roomApi.play(roomCode, playerId, card);
-      return;
-    }
-
-    // Solo mode
-    if (phase === "pitching") {
-      setTrumpSuit(card.suit);
-      setPhase("trickPlay");
-    }
-
-    const newPlays = [...trickPlays, { player: SOUTH, card }];
-    setTrickPlays(newPlays);
-    setHands(prev => {
-      const next = prev.map(h => [...h]);
-      next[SOUTH] = next[SOUTH].filter(c => !cardEquals(c, card));
-      return next;
-    });
-
-    if (newPlays.length >= 4) {
-      setPhase("trickCollect");
-    } else {
-      const np = (SOUTH + 1) % 4;
-      setCurrentPlayer(np);
-      setStatusMsg(`${getPlayerName(np)} is playing...`);
-    }
-  }, [mode, roomCode, playerId, phase, trickPlays, initAudio, getPlayerName]);
-
-  // ── Next hand (solo) ──
-  const nextHand = useCallback(() => {
-    if (mode === 'online') return; // handled by server
-    setDealer(prev => nextDealer(prev));
-    setHandNumber(prev => prev + 1);
-    setPhase("dealing");
-    setScreen("playing");
-  }, [mode]);
-
-  // ── Play again (solo) ──
+  // ── Rematch ──
   const playAgain = useCallback(() => {
-    if (mode === 'online') {
-      roomApi.rematch(roomCode, playerId);
-      return;
+    roomApi.rematch(roomCode, playerId);
+  }, [roomCode, playerId]);
+
+  const copyRoomLink = useCallback(async () => {
+    const shareUrl = getShareUrl();
+    if (!shareUrl) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Join my Pitch room', url: shareUrl });
+        return;
+      } catch {}
     }
-    setScores({ [TEAM_A]: 0, [TEAM_B]: 0 });
-    setHandNumber(1);
-    setGameWinner(null);
-    setShowConfetti(false);
-    setHands([[], [], [], []]);
-    setPhase("cutForDeal");
-    setScreen("playing");
-  }, [mode, roomCode, playerId]);
+    await navigator.clipboard?.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [getShareUrl]);
+
+  const leaveRoom = useCallback(() => {
+    if (confirm('Leave game and return to lobby?')) goToLobby();
+  }, [goToLobby]);
 
   // ── Derived state ──
-  const isOnline = mode === 'online';
-  const myActualSeat = isOnline ? mySeat : SOUTH;
+  const myActualSeat = mySeat;
+  const waitingPlayers = Math.max(0, targetHumans - joinedHumans);
+  const readyHumans = humanSeats.filter(seat => rematchState?.[seat]).length;
+  const myRematchReady = !!rematchState?.[mySeat];
 
   const ledSuit = trickPlays.length > 0 ? trickPlays[0].card.suit : null;
-
-  // In online mode, server provides playable cards; in solo, compute locally
-  const playableCards = isOnline
-    ? (lastStateRef.current?.playableCards || [])
-    : (phase === "trickPlay" && currentPlayer === SOUTH)
-      ? getPlayableCards(hands[SOUTH], trumpSuit, ledSuit)
-      : (phase === "pitching" && currentPlayer === SOUTH)
-        ? [...hands[SOUTH]]
-        : [];
-
-  const validBids = isOnline
-    ? (lastStateRef.current?.validBids || [])
-    : (phase === "bidding" && currentBidder === SOUTH)
-      ? getValidBids(
-          highBid.amount,
-          dealer === SOUTH,
-          bids.length === 3 && bids.every(b => b.bid === 0)
-        )
-      : [];
+  const playableCards = lastStateRef.current?.playableCards || [];
+  const validBids = lastStateRef.current?.validBids || [];
 
   // ── Derived UI state ──
   const isHumanTurn = (phase === 'trickPlay' || phase === 'pitching') && currentPlayer === myActualSeat;
   const isHumanBidding = phase === 'bidding' && currentBidder === myActualSeat;
   const mustFollow = isHumanTurn && ledSuit &&
     playableCards.length < hands[myActualSeat]?.length;
-  const livePoints = mode === 'solo' ? getLivePoints(originalHands, capturedTricks, trumpSuit) : null;
+  const livePoints = onlineLivePoints;
 
   const getDimLevel = (seat) => {
     if (!isHumanTurn) return 'primary';
@@ -776,7 +489,9 @@ export default function Game() {
       (phase === 'bidding' && currentBidder === svrSeat);
     const leading = isLeading(svrSeat);
     const isD = dealer === svrSeat;
-    const bubble = bidBubbles[svrSeat];
+    const relation = svrSeat === myActualSeat
+      ? null
+      : (getTeam(svrSeat) === getTeam(myActualSeat) ? 'ALLY' : 'FOE');
 
     return (
       <div style={{
@@ -802,6 +517,19 @@ export default function Game() {
           letterSpacing: 1.5, textTransform: 'uppercase',
           transition: 'color 0.3s',
         }}>{name}</span>
+        {relation && (
+          <span style={{
+            fontSize: 'clamp(7px, 1.9vw, 8px)',
+            fontWeight: 700,
+            color: relation === 'ALLY' ? '#7a9b8a' : '#ad6b6b',
+            background: relation === 'ALLY' ? 'rgba(122,155,138,0.14)' : 'rgba(173,107,107,0.14)',
+            border: `1px solid ${relation === 'ALLY' ? 'rgba(122,155,138,0.22)' : 'rgba(173,107,107,0.22)'}`,
+            borderRadius: 4,
+            padding: '1px 5px',
+            letterSpacing: 1,
+            lineHeight: 1.2,
+          }}>{relation}</span>
+        )}
         {isD && (
           <span style={{
             fontSize: 'clamp(10px, 2.8vw, 12px)', fontWeight: 800,
@@ -830,13 +558,8 @@ export default function Game() {
 
 
   // ── Rotate trick plays for display ──
-  const displayTrickPlays = isOnline
-    ? trickPlays.map(p => ({ ...p, player: displaySeat(p.player) }))
-    : trickPlays;
-
-  const displayCutCards = isOnline
-    ? cutCards.map(c => ({ ...c, player: displaySeat(c.player) }))
-    : cutCards;
+  const displayTrickPlays = trickPlays.map((play) => ({ ...play, player: displaySeat(play.player) }));
+  const displayCutCards = cutCards.map((cut) => ({ ...cut, player: displaySeat(cut.player) }));
 
   // ═══════════════════════════════════════
   // ── RENDER ──
@@ -898,15 +621,20 @@ export default function Game() {
                 ))}
               </div>
 
-              {/* Mode not selected yet */}
               {!lobbyAction && (
                 <>
-                  <button className="btn w-full" onClick={() => setScreen("difficulty")}>
-                    PLAY SOLO
+                  <button className="btn w-full" onClick={() => {
+                    setLobbyError('');
+                    setLobbyAction('hostRoom');
+                  }}>
+                    OPEN ROOM
                   </button>
 
-                  <button className="btn w-full" onClick={() => setLobbyAction('enterName')}>
-                    PLAY ONLINE
+                  <button className="btn w-full" onClick={() => {
+                    setLobbyError('');
+                    setLobbyAction('joinRoom');
+                  }}>
+                    JOIN ROOM
                   </button>
 
                   <button className="btn btn-sm w-full" onClick={() => setScreen("howToPlay")}
@@ -916,11 +644,10 @@ export default function Game() {
                 </>
               )}
 
-              {/* Enter name */}
-              {lobbyAction === 'enterName' && (
+              {lobbyAction === 'hostRoom' && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
-                    ENTER YOUR NAME
+                    OPEN A ROOM
                   </div>
                   <input
                     type="text"
@@ -940,30 +667,64 @@ export default function Game() {
                     onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
                     onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
                   />
-                  <button className="btn w-full"
-                    onClick={() => { if (playerName.trim()) setLobbyAction('chooseAction'); }}
-                    disabled={!playerName.trim()}
-                    style={{
-                      color: playerName.trim() ? '#c8aa50' : 'rgba(255,255,255,0.15)',
-                      borderColor: playerName.trim() ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
-                    }}>
-                    CONTINUE
-                  </button>
-                  <button className="btn btn-sm" onClick={() => setLobbyAction(null)}
-                    style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
-                    BACK
-                  </button>
-                </div>
-              )}
-
-              {/* Create or Join */}
-              {lobbyAction === 'chooseAction' && (
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
-                    PLAYING AS {playerName.toUpperCase()}
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: 2, fontWeight: 500 }}>
+                    PLAYERS
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+                    {[1, 2, 4].map((count) => (
+                      <button key={count} className="btn btn-sm"
+                        onClick={() => setHumanCount(count)}
+                        style={{
+                          flex: 1,
+                          color: humanCount === count ? '#c8aa50' : 'rgba(255,255,255,0.2)',
+                          borderColor: humanCount === count ? 'rgba(200,170,80,0.35)' : 'rgba(255,255,255,0.06)',
+                          background: humanCount === count ? 'rgba(200,170,80,0.1)' : 'transparent',
+                          fontSize: 9,
+                        }}>
+                        {count}P
+                      </button>
+                    ))}
                   </div>
 
-                  {/* Difficulty selector */}
+                  {humanCount === 2 && (
+                    <>
+                      <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -4 }}>
+                        2 PLAYER MODE
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+                        <button className="btn btn-sm"
+                          onClick={() => setGameMode('versus')}
+                          style={{
+                            flex: 1, fontSize: 9,
+                            color: gameMode === 'versus' ? '#ad6b6b' : 'rgba(255,255,255,0.2)',
+                            borderColor: gameMode === 'versus' ? 'rgba(173,107,107,0.4)' : 'rgba(255,255,255,0.06)',
+                            background: gameMode === 'versus' ? 'rgba(173,107,107,0.1)' : 'transparent',
+                          }}>
+                          VS FRIEND
+                        </button>
+                        <button className="btn btn-sm"
+                          onClick={() => setGameMode('coop')}
+                          style={{
+                            flex: 1, fontSize: 9,
+                            color: gameMode === 'coop' ? '#6b8aad' : 'rgba(255,255,255,0.2)',
+                            borderColor: gameMode === 'coop' ? 'rgba(107,138,173,0.4)' : 'rgba(255,255,255,0.06)',
+                            background: gameMode === 'coop' ? 'rgba(107,138,173,0.1)' : 'transparent',
+                          }}>
+                          WITH FRIEND
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -4, textAlign: 'center', lineHeight: 1.5 }}>
+                    {humanCount === 1 && 'STARTS IMMEDIATELY WITH 3 AIs'}
+                    {humanCount === 2 && (gameMode === 'versus' ? 'YOU + AI vs FRIEND + AI' : 'YOU + FRIEND vs 2 AIs')}
+                    {humanCount === 4 && 'FOUR HUMANS. FIXED TEAMS ACROSS THE TABLE'}
+                  </div>
+
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', letterSpacing: 2, fontWeight: 500 }}>
+                    AI DIFFICULTY
+                  </div>
                   <div style={{ display: 'flex', gap: 6, width: '100%' }}>
                     {Object.entries(DIFF_LABELS).map(([key, label]) => (
                       <button key={key} className="btn btn-sm"
@@ -979,68 +740,54 @@ export default function Game() {
                       </button>
                     ))}
                   </div>
-                  <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -8 }}>
-                    AI DIFFICULTY
-                  </div>
-
-                  {/* Game mode selector */}
-                  <div style={{ display: 'flex', gap: 6, width: '100%', marginTop: 4 }}>
-                    <button className="btn btn-sm"
-                      onClick={() => setGameMode('versus')}
-                      style={{
-                        flex: 1, fontSize: 9,
-                        color: gameMode === 'versus' ? '#ad6b6b' : 'rgba(255,255,255,0.2)',
-                        borderColor: gameMode === 'versus' ? 'rgba(173,107,107,0.4)' : 'rgba(255,255,255,0.06)',
-                        background: gameMode === 'versus' ? 'rgba(173,107,107,0.1)' : 'transparent',
-                      }}>
-                      VS FRIEND
-                    </button>
-                    <button className="btn btn-sm"
-                      onClick={() => setGameMode('coop')}
-                      style={{
-                        flex: 1, fontSize: 9,
-                        color: gameMode === 'coop' ? '#6b8aad' : 'rgba(255,255,255,0.2)',
-                        borderColor: gameMode === 'coop' ? 'rgba(107,138,173,0.4)' : 'rgba(255,255,255,0.06)',
-                        background: gameMode === 'coop' ? 'rgba(107,138,173,0.1)' : 'transparent',
-                      }}>
-                      WITH FRIEND
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', marginTop: -8 }}>
-                    {gameMode === 'versus' ? 'YOU + AI vs FRIEND + AI' : 'YOU + FRIEND vs 2 AIs'}
-                  </div>
 
                   <button className="btn w-full" onClick={createRoom}
-                    style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-                    CREATE ROOM
-                  </button>
-                  <button className="btn w-full" onClick={() => setLobbyAction('joinRoom')}
-                    style={{ color: '#6b8aad', borderColor: 'rgba(107,138,173,0.3)' }}>
-                    JOIN ROOM
+                    style={{
+                      color: playerName.trim() ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: playerName.trim() ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                    }}>
+                    {humanCount === 1 ? 'START 1P ROOM' : `OPEN ${humanCount}P ROOM`}
                   </button>
                   {lobbyError && (
                     <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
                   )}
-                  <button className="btn btn-sm" onClick={() => setLobbyAction('enterName')}
+                  <button className="btn btn-sm" onClick={() => { setLobbyAction(null); setLobbyError(''); }}
                     style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
                     BACK
                   </button>
                 </div>
               )}
 
-              {/* Join room */}
               {lobbyAction === 'joinRoom' && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
-                    ENTER ROOM CODE
+                    JOIN ROOM
                   </div>
+                  <input
+                    type="text"
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value.slice(0, 12))}
+                    placeholder="Your name"
+                    maxLength={12}
+                    autoFocus={!joinCode}
+                    style={{
+                      width: '100%', padding: '10px 14px',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8, color: '#e0e0e0',
+                      fontSize: 16, textAlign: 'center',
+                      outline: 'none', fontFamily: 'Inter, sans-serif',
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'rgba(200,170,80,0.4)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
+                  />
                   <input
                     type="text"
                     value={joinCode}
                     onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 4))}
-                    placeholder="XXXX"
+                    placeholder="ROOM CODE"
                     maxLength={4}
-                    autoFocus
+                    autoFocus={!!joinCode}
                     style={{
                       width: '100%', padding: '12px 14px',
                       background: 'rgba(255,255,255,0.05)',
@@ -1054,17 +801,16 @@ export default function Game() {
                     onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.12)'}
                   />
                   <button className="btn w-full" onClick={joinRoom}
-                    disabled={joinCode.length !== 4}
                     style={{
-                      color: joinCode.length === 4 ? '#c8aa50' : 'rgba(255,255,255,0.15)',
-                      borderColor: joinCode.length === 4 ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
+                      color: playerName.trim() && joinCode.length === 4 ? '#c8aa50' : 'rgba(255,255,255,0.15)',
+                      borderColor: playerName.trim() && joinCode.length === 4 ? 'rgba(200,170,80,0.3)' : 'rgba(255,255,255,0.06)',
                     }}>
-                    JOIN
+                    JOIN ROOM
                   </button>
                   {lobbyError && (
                     <div style={{ color: '#ad6b6b', fontSize: 11 }}>{lobbyError}</div>
                   )}
-                  <button className="btn btn-sm" onClick={() => { setLobbyAction('chooseAction'); setLobbyError(''); }}
+                  <button className="btn btn-sm" onClick={() => { setLobbyAction(null); setLobbyError(''); }}
                     style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>
                     BACK
                   </button>
@@ -1073,34 +819,12 @@ export default function Game() {
 
               {!lobbyAction && (
                 <div style={{ fontSize: 'clamp(7px, 1.8vw, 9px)', color: 'rgba(255,255,255,0.15)', textAlign: 'center', lineHeight: 1.6 }}>
-                  BID. PITCH TRUMP. TAKE TRICKS.<br />
-                  FIRST TEAM TO {WIN_SCORE} WINS.
+                  OPEN A ROOM FOR 1, 2, OR 4 HUMANS.<br />
+                  SHARE A LINK. FIRST TEAM TO {WIN_SCORE} WINS.
                 </div>
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ── DIFFICULTY (solo) ── */}
-      {screen === "difficulty" && (
-        <div className="flex flex-col items-center w-full max-w-[320px] px-4 gap-4">
-          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>SELECT DIFFICULTY</div>
-          {Object.entries(DIFF_LABELS).map(([key, label]) => (
-            <button key={key} className="btn w-full"
-              onClick={() => startGame(key)}
-              style={{ color: DIFF_COLORS[key], borderColor: DIFF_COLORS[key] + '44',
-                       flexDirection: 'column', gap: 2 }}>
-              <div>{label}</div>
-              <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.25)', marginTop: 2, textTransform: 'none', letterSpacing: 'normal' }}>
-                {DIFF_DESC[key]}
-              </div>
-            </button>
-          ))}
-          <button className="btn btn-sm" onClick={goToLobby}
-            style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)', marginTop: 8 }}>
-            BACK
-          </button>
         </div>
       )}
 
@@ -1188,7 +912,7 @@ export default function Game() {
           }} />
 
           {/* Waiting for opponent overlay */}
-          {isOnline && waiting && (
+          {waiting && (
             <div style={{
               position: 'fixed', inset: 0,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -1196,7 +920,7 @@ export default function Game() {
               background: 'rgba(6,14,8,0.95)',
             }}>
               <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 500 }}>
-                ROOM CODE
+                SHARE ROOM
               </div>
               <div style={{
                 fontSize: 'clamp(36px, 10vw, 52px)', fontWeight: 700,
@@ -1205,19 +929,56 @@ export default function Game() {
               }}>
                 {roomCode}
               </div>
-              <button className="btn btn-sm" onClick={() => {
-                navigator.clipboard?.writeText(roomCode);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                maxWidth: 'min(320px, calc(100vw - 32px))',
+              }}>
+                {humanSeats.map((seat) => {
+                  const filled = onlineNames[seat] && onlineNames[seat] !== 'OPEN';
+                  return (
+                    <div key={seat} style={{
+                      minWidth: 86,
+                      padding: '8px 12px',
+                      borderRadius: 12,
+                      background: filled ? 'rgba(200,170,80,0.08)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${filled ? 'rgba(200,170,80,0.18)' : 'rgba(255,255,255,0.06)'}`,
+                      textAlign: 'center',
+                    }}>
+                      <div style={{
+                        fontSize: 8,
+                        color: 'rgba(255,255,255,0.22)',
+                        letterSpacing: 2,
+                        marginBottom: 3,
+                      }}>
+                        {seat === mySeat ? 'YOU' : `SEAT ${seat + 1}`}
+                      </div>
+                      <div style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: filled ? '#c8aa50' : 'rgba(255,255,255,0.28)',
+                        letterSpacing: 1,
+                      }}>
+                        {seat === mySeat ? 'READY' : getPlayerName(seat)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <button className="btn btn-sm" onClick={copyRoomLink}
                 style={{ color: copied ? '#7a9b8a' : 'rgba(255,255,255,0.35)', borderColor: 'rgba(255,255,255,0.1)' }}>
-                {copied ? 'COPIED!' : 'COPY CODE'}
+                {copied ? 'LINK COPIED' : 'COPY LINK'}
               </button>
               <div style={{
                 fontSize: 12, color: 'rgba(255,255,255,0.25)',
                 animation: 'pulse 2s ease-in-out infinite',
+                textAlign: 'center',
               }}>
-                Waiting for opponent to join...
+                {waitingPlayers > 0
+                  ? `Waiting for ${waitingPlayers} more player${waitingPlayers === 1 ? '' : 's'}...`
+                  : 'Starting game...'}
               </div>
               <button className="btn btn-sm" onClick={goToLobby}
                 style={{ color: 'rgba(255,255,255,0.2)', borderColor: 'rgba(255,255,255,0.06)', marginTop: 16 }}>
@@ -1231,50 +992,16 @@ export default function Game() {
             width: '100%', height: '100%',
             maxWidth: 960, margin: '0 auto',
           }}>
-            {/* Home / menu button */}
-            {!waiting && (
-              <button
-                onClick={() => { if (confirm('Leave game and return to lobby?')) goToLobby(); }}
-                style={{
-                  position: 'absolute',
-                  top: 'max(10px, env(safe-area-inset-top, 0px))',
-                  left: 8,
-                  zIndex: 25,
-                  background: 'rgba(0,0,0,0.3)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  borderRadius: 10,
-                  padding: 'clamp(6px, 1.5vw, 8px)',
-                  color: 'rgba(255,255,255,0.4)',
-                  fontSize: 'clamp(14px, 3.5vw, 16px)',
-                  lineHeight: 1,
-                  cursor: 'pointer',
-                  backdropFilter: 'blur(8px)',
-                  WebkitBackdropFilter: 'blur(8px)',
-                  WebkitTapHighlightColor: 'transparent',
-                }}
-              >
-                ✕
-              </button>
-            )}
-
             <ScoreBoard
               scores={scores}
               bidInfo={bidAmount > 0 ? { amount: bidAmount, team: biddingTeam } : null}
               trickNumber={trickNumber}
               handNumber={handNumber}
-              wasSet={wasSet}
+              phase={phase}
+              roomCode={roomCode}
+              trumpSuit={trumpSuit}
+              onExit={leaveRoom}
             />
-
-            {/* Room code badge (online) */}
-            {isOnline && !waiting && (
-              <div style={{
-                position: 'absolute', top: 6, right: 8,
-                fontSize: 9, color: 'rgba(255,255,255,0.15)',
-                letterSpacing: 2, fontWeight: 500, zIndex: 20,
-              }}>
-                {roomCode}
-              </div>
-            )}
 
             {/* ── NORTH (display position) ── */}
             {(() => {
@@ -1282,7 +1009,7 @@ export default function Game() {
               return (
                 <div style={{
                   position: 'absolute',
-                  top: 'clamp(52px, 12vw, 68px)',
+                  top: 'clamp(74px, 16vw, 98px)',
                   left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column', alignItems: 'center',
                   gap: 4, zIndex: 10,
@@ -1332,36 +1059,6 @@ export default function Game() {
                 </div>
               );
             })()}
-
-            {/* ── TRUMP INDICATOR — left side badge ── */}
-            {trumpSuit && (
-              <div style={{
-                position: 'absolute',
-                left: 'clamp(10px, 2.5vw, 24px)',
-                top: 'clamp(42px, 10vw, 60px)',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-                zIndex: 20,
-                padding: 'clamp(6px, 1.5vw, 10px) clamp(8px, 2vw, 14px)',
-                borderRadius: 12,
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                animation: 'trumpReveal 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-              }}>
-                <span style={{
-                  fontSize: 'clamp(8px, 2vw, 9px)',
-                  color: 'rgba(255,255,255,0.35)',
-                  letterSpacing: 2, fontWeight: 600,
-                }}>TRUMP</span>
-                <span style={{
-                  fontSize: 'clamp(32px, 9vw, 48px)',
-                  color: isRedSuit(trumpSuit) ? '#c44' : '#ddd',
-                  filter: `drop-shadow(0 2px 8px ${isRedSuit(trumpSuit) ? 'rgba(200,60,60,0.4)' : 'rgba(255,255,255,0.2)'})`,
-                  lineHeight: 1,
-                }}>{SUIT_SYMBOLS[trumpSuit]}</span>
-              </div>
-            )}
 
             {/* ── TRICK AREA / CUT FOR DEAL ── */}
             <TrickArea
@@ -1442,12 +1139,9 @@ export default function Game() {
                   transition: 'all 0.3s',
                   animation: cutWinner ? 'scoreCount 0.4s ease-out' : undefined,
                 }}>
-                  {isOnline
-                    ? (cutWinner !== null
-                      ? `${getPlayerName(cutWinner)} deals first`
-                      : 'Cutting for deal...')
-                    : statusMsg
-                  }
+                  {cutWinner !== null
+                    ? `${getPlayerName(cutWinner)} deals first`
+                    : 'Cutting for deal...'}
                 </div>
                 {cutWinner && (
                   <div style={{
@@ -1640,7 +1334,7 @@ export default function Game() {
                               : '0 0 12px rgba(200,170,80,0.1), inset 0 1px 0 rgba(200,170,80,0.1)',
                             letterSpacing: isPass ? '0.05em' : '0.12em',
                           }}>
-                          {isPass ? 'PASS' : (myActualSeat === dealer && b === highBid.amount && highBid.amount > 0 ? `STEAL ${b}` : `BID ${b}`)}
+                          {isPass ? 'PASS' : (isDealerStealBid(b, highBid.amount, myActualSeat === dealer) ? `STEAL ${b}` : `BID ${b}`)}
                         </button>
                       );
                     })}
@@ -1960,19 +1654,9 @@ export default function Game() {
               </div>
             </div>
 
-            {isOnline ? (
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
-                Next hand starting...
-              </div>
-            ) : (
-              <button className="btn" onClick={() => {
-                if (navigator.vibrate) navigator.vibrate(10);
-                nextHand();
-              }}
-                style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-                NEXT HAND
-              </button>
-            )}
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', animation: 'pulse 2s ease-in-out infinite' }}>
+              Next hand starting...
+            </div>
           </div>
         );
       })()}
@@ -1983,16 +1667,10 @@ export default function Game() {
           style={{ gap: 'clamp(12px, 3vw, 20px)' }}>
           <div style={{
             fontSize: 'clamp(22px, 7vw, 28px)', fontWeight: 700,
-            color: (() => {
-              const myTeam = isOnline ? getTeam(mySeat) : TEAM_A;
-              return gameWinner === myTeam ? '#7a9b8a' : '#ad6b6b';
-            })(),
+            color: gameWinner === getTeam(mySeat) ? '#7a9b8a' : '#ad6b6b',
             letterSpacing: 2,
           }}>
-            {(() => {
-              const myTeam = isOnline ? getTeam(mySeat) : TEAM_A;
-              return gameWinner === myTeam ? 'YOU WIN' : 'YOU LOSE';
-            })()}
+            {gameWinner === getTeam(mySeat) ? 'YOU WIN' : 'YOU LOSE'}
           </div>
 
           <div style={{ fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 700 }}>
@@ -2005,13 +1683,9 @@ export default function Game() {
             {handNumber} hands played
           </div>
 
-          {isOnline && (
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>
-              {rematchState.p1 && mySeat !== SOUTH && 'Opponent wants rematch'}
-              {rematchState.p2 && mySeat !== WEST && 'Opponent wants rematch'}
-              {((mySeat === SOUTH && rematchState.p1) || (mySeat === WEST && rematchState.p2)) && 'Waiting for opponent...'}
-            </div>
-          )}
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>
+            {`${readyHumans}/${targetHumans} ready for rematch${myRematchReady ? '' : ' — tap rematch when ready'}`}
+          </div>
 
           <div style={{ display: 'flex', gap: 'clamp(6px, 2vw, 12px)' }}>
             <button className="btn" onClick={() => {
@@ -2019,7 +1693,7 @@ export default function Game() {
               playAgain();
             }}
               style={{ color: '#c8aa50', borderColor: 'rgba(200,170,80,0.3)' }}>
-              {isOnline ? 'REMATCH' : 'PLAY AGAIN'}
+              {myRematchReady ? 'READY' : 'REMATCH'}
             </button>
             <button className="btn btn-sm" onClick={goToLobby}
               style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.06)' }}>

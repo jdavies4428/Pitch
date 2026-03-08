@@ -29,7 +29,7 @@ export default function Hand({
       transition: 'opacity 0.4s ease',
     }}>
       {cards.map((card, idx) => (
-        <div key={cardId(card)} style={{
+        <div key={card ? cardId(card) : `${position}-face-down-${idx}`} style={{
           marginLeft: isHorizontal && idx > 0
             ? (isPlayer ? playerOverlap : aiHOverlap)
             : 0,

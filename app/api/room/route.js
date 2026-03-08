@@ -2,15 +2,23 @@ import { NextResponse } from 'next/server';
 import { getRoom, setRoom } from '@/lib/redis';
 import {
   SOUTH, WEST, NORTH, EAST, TEAM_A, TEAM_B,
-  getTeam, getPartner, dealHands, getValidBids,
+  getTeam, dealHands, getValidBids, isDealerStealBid, isWinningBid,
   getPlayableCards, evaluateTrick, scoreHand,
-  updateScores, nextDealer, cardEquals, createDeck, shuffleDeck,
+  updateScores, nextDealer, cardEquals, createDeck, shuffleDeck, getLivePoints,
 } from '@/lib/game';
 import { getAiBid, getAiPlay, getAiTrumpCard } from '@/lib/ai';
 
 const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const AI_DELAY = 800; // ms between AI actions
 const PHASE_DELAY = 1500; // ms for phase transitions (trick collect, etc.)
+const ALL_SEATS = [SOUTH, WEST, NORTH, EAST];
+const HUMAN_COUNTS = new Set([1, 2, 4]);
+const AI_NAMES = {
+  [SOUTH]: 'MAV',
+  [WEST]: 'SPIKE',
+  [NORTH]: 'ACE',
+  [EAST]: 'BLITZ',
+};
 
 function generateCode() {
   let code = '';
@@ -20,29 +28,74 @@ function generateCode() {
   return code;
 }
 
-function isAiSeat(room, seat) {
-  // Co-op: humans at SOUTH+NORTH, AI at WEST+EAST
-  // Versus: humans at SOUTH+WEST, AI at NORTH+EAST
-  if (room.gameMode === 'coop') {
-    return seat === WEST || seat === EAST;
+function getHumanSeatPlan(targetHumans, gameMode) {
+  if (targetHumans === 1) return [SOUTH];
+  if (targetHumans === 2) {
+    return gameMode === 'coop' ? [SOUTH, NORTH] : [SOUTH, WEST];
   }
-  return seat === NORTH || seat === EAST;
+  if (targetHumans === 4) return [...ALL_SEATS];
+  return [];
 }
 
-function getPlayer2Seat(room) {
-  return room.gameMode === 'coop' ? NORTH : WEST;
+function normalizeGameMode(targetHumans, gameMode) {
+  if (targetHumans === 1) return 'solo';
+  if (targetHumans === 4) return 'teams';
+  return gameMode === 'coop' ? 'coop' : 'versus';
+}
+
+function syncPlayerNames(room) {
+  const names = {};
+  for (const seat of ALL_SEATS) {
+    if (room.participantsBySeat?.[seat]) {
+      names[seat] = room.participantsBySeat[seat].name;
+    } else if (room.humanSeats.includes(seat)) {
+      names[seat] = 'OPEN';
+    } else {
+      names[seat] = AI_NAMES[seat];
+    }
+  }
+  room.playerNames = names;
+}
+
+function getJoinedHumanCount(room) {
+  return room.humanSeats.filter(seat => !!room.participantsBySeat?.[seat]).length;
+}
+
+function getWaitingCount(room) {
+  return Math.max(0, (room.targetHumans || 0) - getJoinedHumanCount(room));
+}
+
+function allHumansJoined(room) {
+  return getWaitingCount(room) === 0;
+}
+
+function getOpenHumanSeat(room) {
+  return room.humanSeats.find(seat => !room.participantsBySeat?.[seat]) ?? null;
+}
+
+function isAiSeat(room, seat) {
+  return !room.humanSeats.includes(seat);
 }
 
 function getPlayerSeat(room, playerId) {
-  if (room.player1?.id === playerId) return SOUTH;
-  if (room.player2?.id === playerId) return getPlayer2Seat(room);
+  for (const seat of ALL_SEATS) {
+    if (room.participantsBySeat?.[seat]?.id === playerId) return seat;
+  }
   return null;
 }
 
-// Filter game state so a player only sees their own hand
+function markWaiting(room) {
+  room.phase = 'waiting';
+  room.statusMsg = `Waiting for ${getWaitingCount(room)} more player${getWaitingCount(room) === 1 ? '' : 's'}`;
+  room.lastActionAt = Date.now();
+}
+
+// Filter game state so a player only sees their own hand.
 function filterForPlayer(room, playerId) {
   const mySeat = getPlayerSeat(room, playerId);
   if (mySeat === null) return { error: 'Not in this room' };
+
+  syncPlayerNames(room);
 
   const handCounts = room.hands
     ? room.hands.map(h => h.length)
@@ -68,10 +121,19 @@ function filterForPlayer(room, playerId) {
           room.bids?.length === 3 && (room.highBid?.amount || 0) === 0
         )
       : [];
+  const livePoints = getLivePoints(
+    room.originalHands || [[], [], [], []],
+    room.capturedTricks || [],
+    room.trumpSuit
+  );
 
   return {
     roomCode: room.roomCode,
-    gameMode: room.gameMode || 'versus',
+    gameMode: room.gameMode,
+    targetHumans: room.targetHumans,
+    joinedHumans: getJoinedHumanCount(room),
+    waitingCount: getWaitingCount(room),
+    humanSeats: room.humanSeats,
     mySeat,
     phase: room.phase,
     dealer: room.dealer,
@@ -93,14 +155,15 @@ function filterForPlayer(room, playerId) {
     gameNumber: room.gameNumber || 0,
     playableCards,
     validBids,
+    livePoints,
     playerNames: room.playerNames || {},
     cutCards: room.cutCards || [],
     cutWinner: room.cutWinner,
     handResult: room.handResult,
     wasSet: room.wasSet,
     gameWinner: room.gameWinner,
-    waiting: !room.player2,
-    rematch: room.rematch || { p1: false, p2: false },
+    waiting: room.phase === 'waiting' || getWaitingCount(room) > 0,
+    rematch: room.rematchBySeat || {},
     statusMsg: room.statusMsg || '',
     difficulty: room.difficulty || 'medium',
   };
@@ -109,6 +172,7 @@ function filterForPlayer(room, playerId) {
 // ── Phase transition helpers ──
 
 function startCutForDeal(room) {
+  syncPlayerNames(room);
   const deck = shuffleDeck(createDeck());
   const cutCards = [
     { player: SOUTH, card: deck[0] },
@@ -116,11 +180,12 @@ function startCutForDeal(room) {
     { player: NORTH, card: deck[2] },
     { player: EAST, card: deck[3] },
   ];
-  // Highest card wins deal
+
   let winner = cutCards[0];
   for (let i = 1; i < cutCards.length; i++) {
     if (cutCards[i].card.rank > winner.card.rank) winner = cutCards[i];
   }
+
   room.phase = 'cutForDeal';
   room.cutCards = cutCards;
   room.cutWinner = winner.player;
@@ -150,21 +215,23 @@ function startDealing(room) {
   room.gameWinner = null;
   room.cutCards = [];
   room.cutWinner = null;
+  room.aiPreferredSuit = {};
   room.statusMsg = '';
   room.lastActionAt = Date.now();
 }
 
 function applyBid(room, seat, bidAmount) {
+  const currentHighBid = room.highBid?.amount || 0;
+  const isDealer = seat === room.dealer;
   room.bids.push({ seat, bid: bidAmount });
-  const isDealerSteal = seat === room.dealer && bidAmount > 0 && bidAmount === (room.highBid?.amount || 0);
+  const isDealerSteal = isDealerStealBid(bidAmount, currentHighBid, isDealer);
   room.bidBubbles[seat] = bidAmount === 0 ? 'PASS' : (isDealerSteal ? `STEAL ${bidAmount}` : `BID ${bidAmount}`);
 
-  if (bidAmount > 0 && bidAmount >= (room.highBid?.amount || 0)) {
+  if (bidAmount > 0 && isWinningBid(bidAmount, currentHighBid, isDealer)) {
     room.highBid = { seat, amount: bidAmount };
   }
 
-  if (room.bids.length >= 4) {
-    // Bidding complete
+  if (room.bids.length >= ALL_SEATS.length) {
     const winner = room.highBid.seat;
     room.currentPlayer = winner;
     room.phase = 'pitching';
@@ -192,8 +259,7 @@ function applyPlay(room, seat, card) {
   room.trickPlays.push({ player: seat, card });
   room.hands[seat] = room.hands[seat].filter(c => !cardEquals(c, card));
 
-  if (room.trickPlays.length >= 4) {
-    // Trick complete
+  if (room.trickPlays.length >= ALL_SEATS.length) {
     const winner = evaluateTrick(room.trickPlays, room.trumpSuit);
     room.trickWinner = winner;
     room.capturedTricks.push({
@@ -210,7 +276,6 @@ function applyPlay(room, seat, card) {
 
 function advanceAfterTrickCollect(room) {
   if (room.trickNumber >= 6) {
-    // Hand over — score it
     const result = scoreHand(room.originalHands, room.capturedTricks, room.trumpSuit);
     const { newScores, wasSet, gameWinner } = updateScores(
       room.scores, room.biddingTeam, room.bidAmount, result
@@ -222,7 +287,6 @@ function advanceAfterTrickCollect(room) {
     room.phase = gameWinner !== null ? 'gameOver' : 'handOver';
     room.lastActionAt = Date.now();
   } else {
-    // Next trick
     room.trickNumber += 1;
     room.trickPlays = [];
     room.trickWinner = null;
@@ -238,12 +302,10 @@ function advanceAfterHandOver(room) {
   startDealing(room);
 }
 
-// Process one AI action if it's an AI's turn
 function processAiTick(room) {
   const now = Date.now();
   const elapsed = now - (room.lastActionAt || 0);
 
-  // Phase transitions that need timing
   if (room.phase === 'cutForDeal' && elapsed >= 2500) {
     startDealing(room);
     return true;
@@ -259,7 +321,6 @@ function processAiTick(room) {
     return true;
   }
 
-  // AI bidding
   if (room.phase === 'bidding' && isAiSeat(room, room.currentBidder) && elapsed >= AI_DELAY) {
     const seat = room.currentBidder;
     const hand = room.hands[seat];
@@ -271,14 +332,11 @@ function processAiTick(room) {
       allPassedToDealer,
       room.difficulty || 'medium'
     );
-    // Store preferred suit for pitching
-    if (bid > 0) room.aiPreferredSuit = room.aiPreferredSuit || {};
     if (bid > 0) room.aiPreferredSuit[seat] = preferredSuit;
     applyBid(room, seat, bid);
     return true;
   }
 
-  // AI pitching
   if (room.phase === 'pitching' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
@@ -288,7 +346,6 @@ function processAiTick(room) {
     return true;
   }
 
-  // AI trick play
   if (room.phase === 'trickPlay' && isAiSeat(room, room.currentPlayer) && elapsed >= AI_DELAY) {
     const seat = room.currentPlayer;
     const hand = room.hands[seat];
@@ -323,7 +380,6 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 });
   }
 
-  // Process AI tick (one per poll)
   if (processAiTick(room)) {
     await setRoom(code, room);
   }
@@ -337,30 +393,52 @@ export async function POST(request) {
   const body = await request.json();
   const { action } = body;
 
-  // ── CREATE ──
   if (action === 'create') {
-    const { playerId, playerName, difficulty, gameMode } = body;
-    const isCoop = gameMode === 'coop';
-    let code;
+    const {
+      playerId,
+      playerName,
+      difficulty,
+      gameMode,
+      humanCount,
+    } = body;
+
+    const targetHumans = Number(humanCount || 2);
+    if (!HUMAN_COUNTS.has(targetHumans)) {
+      return NextResponse.json({ error: 'Human count must be 1, 2, or 4' }, { status: 400 });
+    }
+
+    const trimmedName = String(playerName || '').trim().slice(0, 12);
+    if (!trimmedName) {
+      return NextResponse.json({ error: 'Missing player name' }, { status: 400 });
+    }
+
+    let code = null;
     let attempts = 0;
     do {
-      code = generateCode();
-      const existing = await getRoom(code);
-      if (!existing) break;
+      const nextCode = generateCode();
+      const existing = await getRoom(nextCode);
+      if (!existing) {
+        code = nextCode;
+        break;
+      }
       attempts++;
     } while (attempts < 10);
 
-    // Co-op: P1=SOUTH, P2=NORTH (partners), AI=WEST+EAST
-    // Versus: P1=SOUTH, P2=WEST (opponents), AI=NORTH+EAST
-    const playerNames = isCoop
-      ? { [SOUTH]: playerName, [WEST]: 'SPIKE', [NORTH]: 'Waiting...', [EAST]: 'BLITZ' }
-      : { [SOUTH]: playerName, [WEST]: 'Waiting...', [NORTH]: 'ACE', [EAST]: 'BLITZ' };
+    if (!code) {
+      return NextResponse.json({ error: 'Failed to create room' }, { status: 500 });
+    }
 
+    const normalizedGameMode = normalizeGameMode(targetHumans, gameMode);
+    const humanSeats = getHumanSeatPlan(targetHumans, normalizedGameMode);
     const room = {
       roomCode: code,
-      gameMode: gameMode || 'versus',
-      player1: { id: playerId, name: playerName },
-      player2: null,
+      gameMode: normalizedGameMode,
+      targetHumans,
+      humanSeats,
+      hostId: playerId,
+      participantsBySeat: {
+        [humanSeats[0]]: { id: playerId, name: trimmedName },
+      },
       dealer: SOUTH,
       phase: 'waiting',
       hands: [[], [], [], []],
@@ -371,6 +449,8 @@ export async function POST(request) {
       bids: [],
       highBid: { seat: -1, amount: 0 },
       bidBubbles: {},
+      biddingTeam: null,
+      bidAmount: 0,
       trickPlays: [],
       trickNumber: 1,
       capturedTricks: [],
@@ -385,16 +465,28 @@ export async function POST(request) {
       handResult: null,
       wasSet: false,
       gameWinner: null,
-      rematch: { p1: false, p2: false },
-      playerNames,
+      rematchBySeat: {},
+      playerNames: {},
+      aiPreferredSuit: {},
       statusMsg: '',
     };
 
+    syncPlayerNames(room);
+    if (targetHumans === 1) {
+      startCutForDeal(room);
+    } else {
+      markWaiting(room);
+    }
+
     await setRoom(code, room);
-    return NextResponse.json({ roomCode: code, mySeat: SOUTH });
+    return NextResponse.json({
+      roomCode: code,
+      mySeat: humanSeats[0],
+      waiting: targetHumans > 1,
+      targetHumans,
+    });
   }
 
-  // ── JOIN ──
   if (action === 'join') {
     const { code, playerId, playerName } = body;
     const room = await getRoom(code);
@@ -402,28 +494,36 @@ export async function POST(request) {
     if (!room) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });
     }
-    const p2Seat = getPlayer2Seat(room);
-    if (room.player2) {
-      // Check if it's a rejoin
-      if (room.player2.id === playerId) {
-        return NextResponse.json({ roomCode: code, mySeat: p2Seat });
-      }
+
+    const trimmedName = String(playerName || '').trim().slice(0, 12);
+    if (!trimmedName) {
+      return NextResponse.json({ error: 'Missing player name' }, { status: 400 });
+    }
+
+    const existingSeat = getPlayerSeat(room, playerId);
+    if (existingSeat !== null) {
+      return NextResponse.json({ roomCode: code, mySeat: existingSeat, waiting: room.phase === 'waiting' });
+    }
+
+    const openSeat = getOpenHumanSeat(room);
+    if (openSeat === null) {
       return NextResponse.json({ error: 'Room is full' }, { status: 400 });
     }
-    // Check if player1 is rejoining
-    if (room.player1.id === playerId) {
-      return NextResponse.json({ roomCode: code, mySeat: SOUTH });
+
+    room.participantsBySeat[openSeat] = { id: playerId, name: trimmedName };
+    syncPlayerNames(room);
+
+    if (allHumansJoined(room)) {
+      room.rematchBySeat = {};
+      startCutForDeal(room);
+    } else {
+      markWaiting(room);
     }
 
-    room.player2 = { id: playerId, name: playerName };
-    room.playerNames[p2Seat] = playerName;
-    startCutForDeal(room);
-
     await setRoom(code, room);
-    return NextResponse.json({ roomCode: code, mySeat: p2Seat });
+    return NextResponse.json({ roomCode: code, mySeat: openSeat, waiting: room.phase === 'waiting' });
   }
 
-  // ── BID ──
   if (action === 'bid') {
     const { code, playerId, bid } = body;
     const room = await getRoom(code);
@@ -434,7 +534,6 @@ export async function POST(request) {
     if (room.phase !== 'bidding') return NextResponse.json({ error: 'Not bidding phase' }, { status: 400 });
     if (room.currentBidder !== seat) return NextResponse.json({ error: 'Not your turn to bid' }, { status: 403 });
 
-    // Validate bid
     const allPassedToDealer = room.bids.length === 3 && (room.highBid?.amount || 0) === 0;
     const validBids = getValidBids(room.highBid?.amount || 0, seat === room.dealer, allPassedToDealer);
     if (!validBids.includes(bid)) {
@@ -446,7 +545,6 @@ export async function POST(request) {
     return NextResponse.json({ ok: true });
   }
 
-  // ── PLAY (pitch or trick play) ──
   if (action === 'play') {
     const { code, playerId, card } = body;
     const room = await getRoom(code);
@@ -456,7 +554,6 @@ export async function POST(request) {
     if (seat === null) return NextResponse.json({ error: 'Not in room' }, { status: 403 });
     if (room.currentPlayer !== seat) return NextResponse.json({ error: 'Not your turn' }, { status: 403 });
 
-    // Validate card is in hand
     const hand = room.hands[seat];
     const cardInHand = hand.find(c => cardEquals(c, card));
     if (!cardInHand) return NextResponse.json({ error: 'Card not in hand' }, { status: 400 });
@@ -464,7 +561,6 @@ export async function POST(request) {
     if (room.phase === 'pitching') {
       applyPitch(room, seat, card);
     } else if (room.phase === 'trickPlay') {
-      // Validate card is playable
       const ledSuit = room.trickPlays.length > 0 ? room.trickPlays[0].card.suit : null;
       const playable = getPlayableCards(hand, room.trumpSuit, ledSuit);
       if (!playable.some(c => cardEquals(c, card))) {
@@ -479,7 +575,6 @@ export async function POST(request) {
     return NextResponse.json({ ok: true });
   }
 
-  // ── REMATCH ──
   if (action === 'rematch') {
     const { code, playerId } = body;
     const room = await getRoom(code);
@@ -488,17 +583,20 @@ export async function POST(request) {
     const seat = getPlayerSeat(room, playerId);
     if (seat === null) return NextResponse.json({ error: 'Not in room' }, { status: 403 });
 
-    if (seat === SOUTH) room.rematch.p1 = true;
-    if (seat === getPlayer2Seat(room)) room.rematch.p2 = true;
+    room.rematchBySeat[seat] = true;
 
-    if (room.rematch.p1 && room.rematch.p2) {
-      // Both want rematch — reset game
+    const everyoneReady = room.humanSeats.every(humanSeat => room.rematchBySeat[humanSeat]);
+    if (everyoneReady) {
       room.scores = { [TEAM_A]: 0, [TEAM_B]: 0 };
       room.gameNumber = (room.gameNumber || 0) + 1;
       room.handNumber = 0;
-      room.rematch = { p1: false, p2: false };
+      room.rematchBySeat = {};
       room.gameWinner = null;
+      room.handResult = null;
+      room.wasSet = false;
       startCutForDeal(room);
+    } else {
+      room.lastActionAt = Date.now();
     }
 
     await setRoom(code, room);
